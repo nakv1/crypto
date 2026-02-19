@@ -28,7 +28,7 @@ Sprint 1 delivers the project foundation:
 - Docker setup for reproducible builds and testing
 
 ---
-## Roadmap
+## Карта / Roadmap
 
 | Sprint | Description |
 |--------|-------------|
@@ -40,55 +40,82 @@ Sprint 1 delivers the project foundation:
 | Sprint 6 | Logging & tamper detection |
 | Sprint 7 | UX polish |
 | Sprint 8 | Final hardening + documentation |
-## 🔗 Project Structure
+## 🔗 Структура проекта / Project Structure
 ```text
+## Архитектура (Sprint 1)
+
+Поток данных:
+
+GUI (PySide6)
+  → Core (EventBus / StateManager / AuditLogger / Crypto placeholders)
+  → Database (SQLite + repositories)
+
+### Структура проекта
+
 crypto_nak2/
-├── src/
-│   ├── core/
-│   │   └── crypto/
-│   │       ├── audit_logger.py
-│   │       ├── config.py
-│   │       ├── events.py
-│   │       ├── key_manager.py
-│   │       ├── security.py
-│   │       └── state_manager.py
-│   ├── database/
-│   │   ├── db.py
-│   │   ├── models.py
-│   │   └── repositories.py
-│   └── gui/
-│       ├── app.py
-│       ├── entry_dialog.py
-│       ├── main_window.py
-│       ├── settings_dialog.py
-│       ├── setup_wizard.py
-│       └── widgets/
-│           ├── audit_log_viewer.py
-│           ├── password_entry.py
-│           └── secure_table.py
-├── Dockerfile
-├── docker-compose.yml
-├── .dockerignore
-├── requirements.txt
-└── README.md
+├─ src/
+│  ├─ core/                         # бизнес-логика: крипта, состояние, события, аудит
+│  │  ├─ crypto/
+│  │  │  ├─ abstract.py             # интерфейс EncryptionService
+│  │  │  └─ placeholder.py          # AES256Placeholder (XOR-заглушка Sprint 1)
+│  │  ├─ audit_logger.py            # AuditLogger: подписка на события и запись в audit_log
+│  │  ├─ config.py                  # ConfigManager: окружения/пути/параметры
+│  │  ├─ events.py                  # EventBus + типы событий
+│  │  ├─ state_manager.py           # StateManager: lock/clipboard/idle placeholders
+│  │  ├─ key_manager.py             # KeyManager: derive/store/load (базовая реализация)
+│  │  └─ security.py                # secure wipe и безопасные утилиты (ctypes)
+│  │
+│  ├─ database/                     # SQLite: подключение, схема, репозитории
+│  │  ├─ db.py                      # пул соединений + user_version (готовность к миграциям)
+│  │  ├─ models.py                  # SQL schema/DDL + структуры данных
+│  │  └─ repositories.py            # Vault/Settings/Audit репозитории
+│  │
+│  ├─ gui/                          # UI (View): PySide6 окна и диалоги
+│  │   ├─ app.py                    # wiring зависимостей, запуск сервисов, показ окна
+│  │   ├─ main_window.py            # главное окно (меню, таблица, статусбар)
+│  │   ├─ setup_wizard.py           # мастер первичной настройки (QWizard)
+│  │   ├─ settings_dialog.py        # окно настроек (заглушка, вкладки)
+│  │   └─ widgets/
+│  │     ├─ password_entry.py       # поле пароля + “показать/скрыть”
+│  │     ├─ secure_table.py         # таблица записей хранилища
+│  │     └─ audit_log_viewer.py     # просмотр аудита (заглушка)
+│  │
+│  │
+│  └─ main.py                       # Запуск приложения
+│
+│
+│
+├─ tests/
+│  ├─ conftest.py                   # фикстуры, тестовая БД
+│  ├─ test_crypto.py                # тесты заглушки шифрования
+│  ├─ test_database.py              # тесты схемы/репозиториев
+│  ├─ test_events.py                # тесты EventBus
+│  └─ test_gui_integration.py       # smoke-тесты GUI (wizard + main window)
+│
+│                    
+├─ README.md                        # описание, roadmap, запуск, архитектура
+├─ requirements.txt                 # зависимости
+├─ pytest.ini                       # настройка pytest (pythonpath=src)
+├─ Dockerfile                       # заглушка (Should)
+└─ docker-compose.yml               # заглушка (Should)
 
 ```
 
-## ⚙️ Setup (Windows)
+## ⚙️ Установка / Setup (Windows)
 
-### 1. Create virtual environment
+### 1. Создание виртуальной среды / Create virtual environment
 
 ```bash
 python -m venv venv
 venv\Scripts\activate
 ```
 
-### 2. Install dependencies
+### 2. Установка зависимостей / Install dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Run application
+### 3. Запуск приложения / Run application
 ```bash
 python main.py
 ```
