@@ -1,0 +1,6 @@
+services:
+  crypto_nak:
+    build: .
+    container_name: crypto_nak
+    working_dir: /app
+    command: ["pytest", "-q"]
