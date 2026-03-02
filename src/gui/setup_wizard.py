@@ -52,13 +52,15 @@ class SetupWizard(QWizard):
 
     @Slot()
     def _on_finish_clicked(self) -> None:
-        password = self._page_password.password()
+        try:
+            password = self._page_password.password()
+        except ValueError as e:
+            QMessageBox.warning(self, "Ошибка", str(e))
+            return
         db_path = self._page_db.db_path()
         iterations = self._page_crypto.iterations()
 
-        if not password:
-            QMessageBox.warning(self, "Ошибка", "Мастер-пароль не может быть пустым")
-            return
+
         if not db_path:
             QMessageBox.warning(self, "Ошибка", "Нужно выбрать путь к базе данных")
             return
@@ -104,8 +106,13 @@ class _PasswordPage(QWizardPage):
     def password(self) -> str:
         p1 = self._pwd1.text()
         p2 = self._pwd2.text()
+
+        if not p1:
+            raise ValueError("Мастер-пароль не может быть пустым")
+
         if p1 != p2:
-            return ""
+            raise ValueError("Пароли не совпадают")
+
         return p1
 
 

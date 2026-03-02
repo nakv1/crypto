@@ -3,7 +3,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
+import sys
+from PySide6.QtWidgets import QDialog
+from core.key_manager import KeyManager
+from gui.setup_wizard import SetupWizard
 
 from core.audit_logger import AuditLogger
 from core.config import ConfigManager
@@ -40,16 +44,36 @@ class CryptoSafeApp:
         # 3) Инициализация сервисов
         # База данных
         db = Database(Path(db_path))
+        print("DB PATH REAL:", db_path)
         db.connect()
-
-        # Репозиторий аудита
-        audit_repo = AuditRepository(db)
-
         # Шина событий
         bus = EventBus()
 
         # Менеджер состояния
         state = StateManager()
+
+        key_manager = KeyManager(db)
+        master_key_record = key_manager.load_key("master")
+
+        print("FIRST RUN CHECK: master_key_record =", master_key_record)
+        if master_key_record is None:
+            wizard = SetupWizard(
+                cfg_mgr=ConfigManager(),
+                db=db,
+                key_manager=key_manager,
+                state=state,
+            )
+            result = wizard.exec()
+
+            if result != QDialog.Accepted:
+                QMessageBox.critical(
+                    None,
+                    "CryptoSafe",
+                    "Setup не завершён. Приложение будет закрыто."
+                )
+                return 0
+        # Репозиторий аудита
+        audit_repo = AuditRepository(db)
 
         # Логгер аудита (подписывается на события)
         audit = AuditLogger(bus, audit_repo)

@@ -1,5 +1,6 @@
 
 import json
+import base64
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional, List, Callable
@@ -161,7 +162,12 @@ class SettingsRepository:
         val = row["setting_value"]
         if int(row["encrypted"] or 0) == 1 and val is not None:
             key_bytes = self._key_provider()
-            raw = self._crypto.decrypt(val, key_bytes)
+            try:
+                ct = base64.b64decode(val)
+                raw = self._crypto.decrypt(ct, key_bytes)
+            except Exception:
+                # если вдруг в базе уже лежали bytes/BLOB со старой логикой
+                raw = self._crypto.decrypt(val, key_bytes)
             return raw.decode("utf-8", errors="replace")
         return val
 
@@ -173,8 +179,8 @@ class SettingsRepository:
         enc_flag = 1 if encrypted else 0
         if encrypted:
             key_bytes = self._key_provider()
-            store_val = self._crypto.encrypt(value.encode("utf-8"), key_bytes)
-
+            ct = self._crypto.encrypt(value.encode("utf-8"), key_bytes)
+            store_val = base64.b64encode(ct).decode("utf-8")
         with self._db.session() as conn:
             conn.execute(
                 """
