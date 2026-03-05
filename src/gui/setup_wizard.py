@@ -42,7 +42,7 @@ class SetupWizard(QWizard):
 
         self._page_password = _PasswordPage()
         self._page_db = _DbPathPage(cfg_mgr)
-        self._page_crypto = _CryptoParamsPage(cfg_mgr)
+        self._page_crypto = _CryptoParamsPage()
 
         self.addPage(self._page_password)
         self.addPage(self._page_db)
@@ -65,16 +65,21 @@ class SetupWizard(QWizard):
             QMessageBox.warning(self, "Ошибка", "Нужно выбрать путь к базе данных")
             return
 
-        # Сохраняем конфиг (путь к БД + параметры KDF).
+        # Сохраняем bootstrap-конфиг (только путь к БД)
         cfg = self._cfg_mgr.load()
         cfg.db_path = Path(db_path)
-        cfg.kdf_iterations = int(iterations)
+
         self._cfg_mgr.save(cfg)
 
         # Поднимаем БД и создаём schema.
         self._db.close()
-        self._db.__init__(cfg.db_path)  # простая инициализация на новый путь
-        self._db.connect()
+
+        new_db = Database(cfg.db_path)
+        new_db.connect()
+
+        # Важно: обновляем ссылки, чтобы KeyManager работал с подключенной БД
+        self._db = new_db
+        self._km = KeyManager(self._db)
 
         # Генерируем salt и сохраняем verifier (Sprint 1).
         salt = self._km.make_salt(16)
@@ -85,6 +90,24 @@ class SetupWizard(QWizard):
 
         # Разблокируем сессию (Sprint 1).
         self._state.unlock(master_key)
+
+        from core.crypto.placeholder import AES256Placeholder
+        from database.repositories import SettingsRepository
+
+        crypto = AES256Placeholder()
+        settings = SettingsRepository(
+            db=self._db,
+            crypto=crypto,
+            key_provider=self._state.get_master_key,
+        )
+
+        # Sprint 1: базовые настройки (как минимум — placeholders)
+        settings.set("ui.clipboard_timeout_sec", "15", encrypted=False)
+        settings.set("security.auto_lock_minutes", "5", encrypted=False)
+
+        # iterations уже хранятся в key_store
+        settings.set("crypto.kdf.iterations", str(int(iterations)), encrypted=False)
+        settings.set("crypto.algorithm", "PLACEHOLDER", encrypted=False)
 
 
 class _PasswordPage(QWizardPage):
@@ -145,13 +168,12 @@ class _DbPathPage(QWizardPage):
 
 
 class _CryptoParamsPage(QWizardPage):
-    def __init__(self, cfg_mgr: ConfigManager):
+    def __init__(self):
         super().__init__()
         self.setTitle("Параметры шифрования")
         self.setSubTitle("Заглушка параметров формирования ключа (Sprint 1).")
 
-        cfg = cfg_mgr.load()
-        self._iterations = QLineEdit(str(cfg.kdf_iterations))
+        self._iterations = QLineEdit("200000")
         self._iterations.setPlaceholderText("Например: 200000")
 
         layout = QVBoxLayout(self)

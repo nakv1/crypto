@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QMessageBox
-import sys
+
 from PySide6.QtWidgets import QDialog
 from core.key_manager import KeyManager
 from gui.setup_wizard import SetupWizard
@@ -39,12 +39,11 @@ class CryptoSafeApp:
         cfg = ConfigManager().load()
 
         # 2) Приоритет пути к БД:
-        db_path = os.getenv("CRYPTOSAFE_DB_PATH") or str(cfg.db_path) or _default_db_path()
+        db_path = os.getenv("CRYPTOSAFE_DB_PATH") or str(cfg.db_path)
 
         # 3) Инициализация сервисов
         # База данных
         db = Database(Path(db_path))
-        print("DB PATH REAL:", db_path)
         db.connect()
         # Шина событий
         bus = EventBus()
@@ -55,7 +54,7 @@ class CryptoSafeApp:
         key_manager = KeyManager(db)
         master_key_record = key_manager.load_key("master")
 
-        print("FIRST RUN CHECK: master_key_record =", master_key_record)
+
         if master_key_record is None:
             wizard = SetupWizard(
                 cfg_mgr=ConfigManager(),
@@ -86,7 +85,7 @@ class CryptoSafeApp:
         main = MainWindow(bus=bus, state=state, audit_repo=audit_repo)
         main.show()
 
-        # 4) Главный цикл Qt + гарантированное освобождение ресурсов
+        # Главный цикл Qt + гарантированное освобождение ресурсов
         try:
             code = app.exec()
             return int(code)

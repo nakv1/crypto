@@ -67,7 +67,10 @@ class EventBus:
             if async_mode:
                 self._executor.submit(handler, event)
             else:
-                handler(event)
+                try:
+                    handler(event)
+                except Exception:
+                    pass
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)
