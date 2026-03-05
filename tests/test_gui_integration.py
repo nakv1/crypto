@@ -12,9 +12,10 @@ from core.key_manager import KeyManager
 from core.state_manager import StateManager
 from core.events import EventBus
 from database.db import Database
-from database.repositories import AuditRepository
+from database.repositories import AuditRepository, SettingsRepository, VaultRepository
 from gui.main_window import MainWindow
 from gui.setup_wizard import SetupWizard
+from core.crypto.placeholder import AES256Placeholder
 
 
 @pytest.fixture
@@ -26,6 +27,7 @@ def qapp():
 def test_setup_wizard_creates_keystore(tmp_path: Path, qapp, monkeypatch):
     # Подменяем HOME, чтобы ConfigManager писал конфиг в tmp.
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     cfg_mgr = ConfigManager(env="test")
     cfg = cfg_mgr.load()
     cfg.db_path = tmp_path / "vault.db"
@@ -38,11 +40,11 @@ def test_setup_wizard_creates_keystore(tmp_path: Path, qapp, monkeypatch):
 
     wiz = SetupWizard(cfg_mgr, db, km, state)
     # Заполняем страницы напрямую.
-    wiz._page_password._pwd1.setText("StrongPassword123")
-    wiz._page_password._pwd2.setText("StrongPassword123")
-    wiz._page_db._path.setText(str(cfg.db_path))
-    wiz._page_crypto._iterations.setText("200000")
-    wiz._on_finish_clicked()
+    wiz.page_password.pwd1.setText("StrongPassword123")
+    wiz.page_password.pwd2.setText("StrongPassword123")
+    wiz.page_db.path.setText(str(cfg.db_path))
+    wiz.page_crypto.iterations_input.setText("200000")
+    wiz.on_finish_clicked()
 
     assert state.is_unlocked()
     assert km.load_key("master") is not None
@@ -57,8 +59,17 @@ def test_main_window_launch(tmp_path: Path, qapp):
 
     bus = EventBus()
     state = StateManager()
+    crypto = AES256Placeholder()
+    vault_repo = VaultRepository(db=db, crypto=crypto, key_provider=state.get_master_key)
+    settings_repo = SettingsRepository(db=db, crypto=crypto, key_provider=state.get_master_key)
 
-    w = MainWindow(bus=bus, state=state, audit_repo=audit)
+    w = MainWindow(
+        bus=bus,
+        state=state,
+        audit_repo=audit,
+        vault_repo=vault_repo,
+        settings_repo=settings_repo,
+    )
     w.show()
     assert w.menuBar() is not None
     w.close()

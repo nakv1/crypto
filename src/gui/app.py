@@ -3,43 +3,31 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QDialog
 
-from PySide6.QtWidgets import QDialog
+from core.crypto.placeholder import AES256Placeholder
 from core.key_manager import KeyManager
+from gui.login_dialog import LoginDialog
 from gui.setup_wizard import SetupWizard
 
 from core.audit_logger import AuditLogger
 from core.config import ConfigManager
-from core.crypto.placeholder import AES256Placeholder
-from core.events import EventBus
+from core.events import EventBus, UserLoggedIn, UserLoggedOut
 from core.state_manager import StateManager
 from database.db import Database
-from database.repositories import AuditRepository
+from database.repositories import AuditRepository, SettingsRepository, VaultRepository
 from gui.main_window import MainWindow
-
-
-def _default_db_path() -> str:
-    # Определяем корень проекта (на 2 уровня выше текущего файла)
-    project_root = Path(__file__).resolve().parents[2]
-
-    # Папка data в корне проекта
-    data_dir = project_root / "data"
-
-    # Создаём папку, если её нет
-    data_dir.mkdir(parents=True, exist_ok=True)
-
-    # Возвращаем путь к базе по умолчанию
-    return str(data_dir / "cryptosafe.db")
 
 
 class CryptoSafeApp:
     def run(self, app: QApplication) -> int:
         # 1) Загружаем конфигурацию приложения
-        cfg = ConfigManager().load()
+        cfg_mgr = ConfigManager()
+        cfg = cfg_mgr.load()
 
         # 2) Приоритет пути к БД:
-        db_path = os.getenv("CRYPTOSAFE_DB_PATH") or str(cfg.db_path)
+        env_db_path = os.getenv("CRYPTOSAFE_DB_PATH")
+        db_path = env_db_path or str(cfg.db_path)
 
         # 3) Инициализация сервисов
         # База данных
@@ -57,7 +45,7 @@ class CryptoSafeApp:
 
         if master_key_record is None:
             wizard = SetupWizard(
-                cfg_mgr=ConfigManager(),
+                cfg_mgr=cfg_mgr,
                 db=db,
                 key_manager=key_manager,
                 state=state,
@@ -71,6 +59,43 @@ class CryptoSafeApp:
                     "Setup не завершён. Приложение будет закрыто."
                 )
                 return 0
+
+            # Мастер мог создать БД в новом месте. Переподключаемся.
+            cfg = cfg_mgr.load()
+            try:
+                db.close()
+            except Exception:
+                pass
+            db = Database(Path(cfg.db_path))
+            db.connect()
+            key_manager = KeyManager(db)
+        else:
+            for _ in range(3):
+                dlg = LoginDialog()
+                if dlg.exec() != QDialog.Accepted:
+                    return 0
+                password = dlg.password()
+                if not password:
+                    QMessageBox.warning(None, "CryptoSafe", "Пароль не может быть пустым.")
+                    continue
+                salt, verifier, params = master_key_record
+                try:
+                    key = key_manager.derive_key(password, salt, params)
+                except Exception:
+                    QMessageBox.warning(None, "CryptoSafe", "Не удалось проверить пароль.")
+                    continue
+                if key_manager.verifier(key) != verifier:
+                    QMessageBox.warning(None, "CryptoSafe", "Неверный пароль.")
+                    continue
+                state.unlock(key)
+                break
+            if not state.is_unlocked():
+                QMessageBox.critical(None, "CryptoSafe", "Доступ к хранилищу не получен.")
+                return 0
+
+        crypto = AES256Placeholder()
+        vault_repo = VaultRepository(db=db, crypto=crypto, key_provider=state.get_master_key)
+        settings_repo = SettingsRepository(db=db, crypto=crypto, key_provider=state.get_master_key)
         # Репозиторий аудита
         audit_repo = AuditRepository(db)
 
@@ -78,11 +103,17 @@ class CryptoSafeApp:
         audit = AuditLogger(bus, audit_repo)
         audit.start()
 
-        # Заглушка криптографии Sprint 1 (напрямую не используется)
-        _crypto = AES256Placeholder()
+        if state.is_unlocked():
+            bus.publish(UserLoggedIn(username=state.username()))
 
         # Главное окно приложения
-        main = MainWindow(bus=bus, state=state, audit_repo=audit_repo)
+        main = MainWindow(
+            bus=bus,
+            state=state,
+            audit_repo=audit_repo,
+            vault_repo=vault_repo,
+            settings_repo=settings_repo,
+        )
         main.show()
 
         # Главный цикл Qt + гарантированное освобождение ресурсов
@@ -92,6 +123,8 @@ class CryptoSafeApp:
         finally:
             # Корректно останавливаем EventBus
             try:
+                if state.is_unlocked():
+                    bus.publish(UserLoggedOut(username=state.username()))
                 bus.shutdown()
             finally:
                 # Закрываем базу данных в любом случае

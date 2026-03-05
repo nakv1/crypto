@@ -16,32 +16,43 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QDialog,
-    QVBoxLayout,
+    QApplication,
 )
 
-from core.events import EventBus, EntryAdded, EntryDeleted
+from core.events import EventBus, EntryAdded, EntryDeleted, EntryUpdated, ClipboardCopied
 from core.state_manager import StateManager
-from database.repositories import AuditRepository
+from database.repositories import AuditRepository, SettingsRepository, VaultRepository
+from gui.entry_dialog import EntryDialog, EntryFormData
 from gui.settings_dialog import SettingsDialog
 from gui.widgets.audit_log_viewer import AuditLogViewer
 from gui.widgets.secure_table import SecureTable, VaultRow
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, bus: EventBus, state: StateManager, audit_repo: AuditRepository):
+    def __init__(
+        self,
+        bus: EventBus,
+        state: StateManager,
+        audit_repo: AuditRepository,
+        vault_repo: VaultRepository,
+        settings_repo: SettingsRepository,
+    ):
         super().__init__()
-        self._bus = bus
-        self._state = state
-        self._audit = audit_repo
+        self.bus = bus
+        self.state = state
+        self.audit = audit_repo
+        self.vault = vault_repo
+        self.settings = settings_repo
 
         self.setWindowTitle("CryptoSafe Manager by nak")
         self.resize(1100, 650)
 
-        self._build_menu()
-        self._build_ui()
-        self._fill_demo_data()
+        self.build_menu()
+        self.build_ui()
+        self.fill_demo_data()
+        self.reload_table()
 
-    def _build_menu(self) -> None:
+    def build_menu(self) -> None:
         mb = self.menuBar()
 
         m_file = mb.addMenu("Файл")
@@ -76,7 +87,7 @@ class MainWindow(QMainWindow):
         act_settings.triggered.connect(self.on_settings)
         act_about.triggered.connect(self.on_about)
 
-    def _build_ui(self) -> None:
+    def build_ui(self) -> None:
         # Верхняя панель действий (быстрый доступ)
         tb = QToolBar("Действия")
         tb.setMovable(False)
@@ -148,9 +159,9 @@ class MainWindow(QMainWindow):
         sb.addWidget(self.lbl_vault, 1)
         sb.addPermanentWidget(self.lbl_clip)
 
-        self._refresh_status()
+        self.refresh_status()
 
-    def _fill_demo_data(self) -> None:
+    def fill_demo_data(self) -> None:
         # Группы (Sprint 1: демо)
         root = QTreeWidgetItem(["Все записи"])
         work = QTreeWidgetItem(["Работа"])
@@ -162,21 +173,58 @@ class MainWindow(QMainWindow):
         self.tree_groups.setCurrentItem(root)
 
         # Таблица (Sprint 1: тестовые записи)
-        rows = [
-            VaultRow("GitHub", "nak", "https://github.com", "dev", "2026-02-18"),
-            VaultRow("Почта", "nak@mail", "https://mail.example", "mail", "2026-02-10"),
-            VaultRow("Банк", "nak", "https://bank.example", "finance", "2026-01-30"),
-        ]
-        self.secure_table.set_rows(rows)
+        try:
+            if not self.vault.list():
+                self.vault.add(
+                    title="GitHub (demo)",
+                    username="demo",
+                    password="demo",
+                    url="https://github.com",
+                    notes="demo",
+                    tags="dev",
+                )
+                self.vault.add(
+                    title="Почта (demo)",
+                    username="demo@mail",
+                    password="demo",
+                    url="https://mail.example",
+                    notes="demo",
+                    tags="mail",
+                )
+        except Exception:
+            pass
 
         # Заглушка таймера буфера
         self.lbl_clip.setText("Буфер: очистка таймером (заглушка Sprint 1)")
 
-    def _refresh_status(self) -> None:
-        if self._state.is_unlocked():
+    def refresh_status(self) -> None:
+        if self.state.is_unlocked():
             self.lbl_vault.setText("Хранилище: открыто")
         else:
             self.lbl_vault.setText("Хранилище: закрыто (Sprint 1)")
+
+    def reload_table(self) -> None:
+        rows = [
+            VaultRow(
+                entry_id=int(r.id),
+                title=r.title,
+                username=r.username,
+                url=r.url,
+                tags=r.tags,
+                updated_at=r.updated_at,
+            )
+            for r in self.vault.list()
+        ]
+        self.secure_table.set_rows(rows)
+
+    def require_unlocked(self) -> bool:
+        if not self.state.is_unlocked():
+            QMessageBox.warning(self, "CryptoSafe", "Хранилище закрыто. Нужен мастер-пароль.")
+            return False
+        return True
+
+    def selected_entry_id(self) -> int | None:
+        return self.secure_table.selected_entry_id()
 
     # Действия меню/кнопок
 
@@ -194,21 +242,104 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def on_add(self) -> None:
-        self._bus.publish(EntryAdded(title="Новая запись (демо)"), async_mode=True)
-        QMessageBox.information(self, "Sprint 1", "Событие EntryAdded отправлено (записано в audit_log).")
+        if not self.require_unlocked():
+            return
+        dlg = EntryDialog(self, title="Добавить запись")
+        if dlg.exec() != QDialog.Accepted:
+            return
+        data = dlg.get_data()
+        if not data.title or not data.password:
+            QMessageBox.warning(self, "CryptoSafe", "Название и пароль обязательны.")
+            return
+        self.vault.add(
+            title=data.title,
+            username=data.username,
+            password=data.password,
+            url=data.url,
+            notes=data.notes,
+            tags=data.tags,
+        )
+        self.bus.publish(EntryAdded(title=data.title), async_mode=True)
+        self.reload_table()
 
     @Slot()
     def on_edit(self) -> None:
-        QMessageBox.information(self, "Sprint 1", "Редактирование будет во Sprint 2.")
+        if not self.require_unlocked():
+            return
+        entry_id = self.selected_entry_id()
+        if entry_id is None:
+            QMessageBox.information(self, "CryptoSafe", "Выбери запись в таблице.")
+            return
+        row = self.vault.get_by_id(entry_id)
+        if row is None:
+            QMessageBox.warning(self, "CryptoSafe", "Запись не найдена.")
+            return
+        preset = EntryFormData(
+            title=row["title"],
+            username=row["username"],
+            password=row["password"],
+            url=row["url"],
+            notes=row["notes"],
+            tags=row["tags"],
+        )
+        dlg = EntryDialog(self, title="Изменить запись", preset=preset)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        data = dlg.get_data()
+        if not data.title or not data.password:
+            QMessageBox.warning(self, "CryptoSafe", "Название и пароль обязательны.")
+            return
+        self.vault.update(
+            entry_id=entry_id,
+            title=data.title,
+            username=data.username,
+            password=data.password,
+            url=data.url,
+            notes=data.notes,
+            tags=data.tags,
+        )
+        self.bus.publish(EntryUpdated(title=data.title), async_mode=True)
+        self.reload_table()
 
     @Slot()
     def on_delete(self) -> None:
-        self._bus.publish(EntryDeleted(title="GitHub (демо)"), async_mode=True)
-        QMessageBox.information(self, "Sprint 1", "Событие EntryDeleted отправлено (записано в audit_log).")
+        if not self.require_unlocked():
+            return
+        entry_id = self.selected_entry_id()
+        if entry_id is None:
+            QMessageBox.information(self, "CryptoSafe", "Выбери запись в таблице.")
+            return
+        row = self.vault.get_by_id(entry_id)
+        if row is None:
+            QMessageBox.warning(self, "CryptoSafe", "Запись не найдена.")
+            return
+        if QMessageBox.question(
+            self,
+            "Подтверждение",
+            f"Удалить запись '{row['title']}'?",
+        ) != QMessageBox.Yes:
+            return
+        self.vault.delete(entry_id)
+        self.bus.publish(EntryDeleted(title=row["title"]), async_mode=True)
+        self.reload_table()
 
     @Slot()
     def on_copy_password(self) -> None:
-        QMessageBox.information(self, "Sprint 1", "Защищённый буфер обмена будет в Sprint 4.")
+        if not self.require_unlocked():
+            return
+        entry_id = self.selected_entry_id()
+        if entry_id is None:
+            QMessageBox.information(self, "CryptoSafe", "Выбери запись в таблице.")
+            return
+        row = self.vault.get_by_id(entry_id)
+        if row is None:
+            QMessageBox.warning(self, "CryptoSafe", "Запись не найдена.")
+            return
+        clipboard = QApplication.clipboard()
+        clipboard.setText(row["password"])
+        timeout = self.settings.get("ui.clipboard_timeout_sec", "15")
+        self.lbl_clip.setText(f"Буфер: пароль скопирован (очистка через {timeout} сек.)")
+        self.bus.publish(ClipboardCopied(entry_id=entry_id), async_mode=True)
 
     @Slot()
     def on_settings(self) -> None:
@@ -224,7 +355,7 @@ class MainWindow(QMainWindow):
 
         # Sprint 1: просто вывод последних записей как текст.
         lines = []
-        for r in self._audit.last(100):
+        for r in self.audit.last(100):
             lines.append(f"{r.timestamp} | {r.action} | {r.details}")
         viewer.set_text("\n".join(lines) if lines else "Пока пусто")
 

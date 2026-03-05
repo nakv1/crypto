@@ -10,15 +10,15 @@ class SettingsDialog(QDialog):
         self.resize(520, 360)
 
         tabs = QTabWidget()
-        tabs.addTab(_SecurityTab(), "Безопасность")
-        tabs.addTab(_UiTab(), "Внешний вид")
-        tabs.addTab(_AdvancedTab(), "Дополнительно")
+        tabs.addTab(SecurityTab(), "Безопасность")
+        tabs.addTab(UiTab(), "Внешний вид")
+        tabs.addTab(AdvancedTab(), "Дополнительно")
 
         layout = QVBoxLayout(self)
         layout.addWidget(tabs)
 
 
-class _SecurityTab(QWidget):
+class SecurityTab(QWidget):
     def __init__(self):
         super().__init__()
         form = QFormLayout(self)
@@ -29,7 +29,7 @@ class _SecurityTab(QWidget):
         form.addRow("", QLabel("Настройки будут применяться в следующих спринтах."))
 
 
-class _UiTab(QWidget):
+class UiTab(QWidget):
     def __init__(self):
         super().__init__()
         form = QFormLayout(self)
@@ -40,7 +40,7 @@ class _UiTab(QWidget):
         form.addRow("", QLabel("Заглушка Sprint 1."))
 
 
-class _AdvancedTab(QWidget):
+class AdvancedTab(QWidget):
     def __init__(self):
         super().__init__()
         form = QFormLayout(self)

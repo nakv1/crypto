@@ -5,7 +5,7 @@ from pathlib import Path
 from database.db import Database
 
 
-def _columns(conn, table: str) -> set[str]:
+def columns(conn, table: str) -> set[str]:
     rows = conn.execute(f"PRAGMA table_info({table});").fetchall()
     return {r["name"] for r in rows}
 
@@ -27,7 +27,7 @@ def test_schema_tables_and_columns(tmp_path: Path):
         assert "settings" in tables
         assert "key_store" in tables
 
-        vault_cols = _columns(conn, "vault_entries")
+        vault_cols = columns(conn, "vault_entries")
         for c in [
             "id",
             "title",
@@ -41,7 +41,7 @@ def test_schema_tables_and_columns(tmp_path: Path):
         ]:
             assert c in vault_cols
 
-        audit_cols = _columns(conn, "audit_log")
+        audit_cols = columns(conn, "audit_log")
         for c in ["id", "action", "timestamp", "entry_id", "details", "signature"]:
             assert c in audit_cols
 

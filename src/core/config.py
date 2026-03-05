@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 
-def _default_env() -> str:
+def default_env() -> str:
     return os.environ.get("CRYPTOSAFE_ENV", "dev").strip().lower() or "dev"
 
-def _app_dir(env: str) -> Path:
+def app_dir(env: str) -> Path:
     home = Path.home()
     base = home / ".cryptosafe_manager"
     return base / env
@@ -23,30 +23,36 @@ class AppConfig:
 
 class ConfigManager:
     def __init__(self, env: Optional[str] = None):
-        self._env = (env or _default_env()).strip().lower()
-        self._dir = _app_dir(self._env)
-        self._file = self._dir / "config.json"
+        self.env = (env or default_env()).strip().lower()
+        self.dir = app_dir(self.env)
+        self.file = self.dir / "config.json"
 
     def load(self) -> AppConfig:
-        self._dir.mkdir(parents=True, exist_ok=True)
+        self.dir.mkdir(parents=True, exist_ok=True)
 
-        if not self._file.exists():
-            cfg = self._make_default()
+        if not self.file.exists():
+            cfg = self.make_default()
             self.save(cfg)
             return cfg
 
         try:
-            raw = json.loads(self._file.read_text(encoding="utf-8"))
+            raw = json.loads(self.file.read_text(encoding="utf-8"))
         except Exception:
             # Если конфиг битый — используем дефолт (не раскрываем деталей пользователю).
-            cfg = self._make_default()
+            cfg = self.make_default()
             self.save(cfg)
             return cfg
 
-        db_path = Path(raw.get("db_path") or str(self._default_db_path()))
+        if not isinstance(raw, dict):
+            raw = {}
 
+        raw_path = raw.get("db_path")
+        if not isinstance(raw_path, (str, bytes, os.PathLike)):
+            db_path = self.default_db_path()
+        else:
+            db_path = Path(raw_path)
         project_root = Path(__file__).resolve().parents[2]
-        default_path = self._default_db_path()
+        default_path = self.default_db_path()
 
         # Если путь относительный — берём дефолт (data/vault.db)
         if not db_path.is_absolute():
@@ -57,24 +63,24 @@ class ConfigManager:
             db_path = default_path
 
         return AppConfig(
-            env=self._env,
+            env=self.env,
             db_path=db_path,
         )
 
     def save(self, cfg: AppConfig) -> None:
-        self._dir.mkdir(parents=True, exist_ok=True)
+        self.dir.mkdir(parents=True, exist_ok=True)
         payload: Dict[str, Any] = {
             "env": cfg.env,
             "db_path": str(Path(cfg.db_path).resolve()),
         }
-        self._file.write_text(
+        self.file.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
         try:
-            if os.name != "nt" and self._file.exists():
-                os.chmod(self._file, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
+            if os.name != "nt" and self.file.exists():
+                os.chmod(self.file, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
         except Exception:
             pass
 
@@ -84,10 +90,10 @@ class ConfigManager:
         self.save(cfg)
         return cfg
 
-    def _make_default(self) -> AppConfig:
-        return AppConfig(env=self._env, db_path=self._default_db_path())
+    def make_default(self) -> AppConfig:
+        return AppConfig(env=self.env, db_path=self.default_db_path())
 
-    def _default_db_path(self) -> Path:
+    def default_db_path(self) -> Path:
         project_root = Path(__file__).resolve().parents[2]
         data_dir = project_root / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -95,4 +101,4 @@ class ConfigManager:
 
     @property
     def config_path(self) -> Path:
-        return self._file
+        return self.file

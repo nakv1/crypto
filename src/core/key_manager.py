@@ -13,7 +13,7 @@ from core.security import secure_buffer
 @dataclass(frozen=True)
 class KdfParams:
     algorithm: str = "pbkdf2_hmac_sha256"
-    iterations: int = 200_000
+    iterations: int = 200000
     dklen: int = 32
 
     def to_json(self) -> str:
@@ -28,7 +28,7 @@ class KdfParams:
             obj = json.loads(s)
             return KdfParams(
                 algorithm=obj.get("algorithm", "pbkdf2_hmac_sha256"),
-                iterations=int(obj.get("iterations", 200_000)),
+                iterations=int(obj.get("iterations", 200000)),
                 dklen=int(obj.get("dklen", 32)),
             )
         except Exception:
@@ -38,7 +38,7 @@ class KdfParams:
 
 class KeyManager:
     def __init__(self, db: Database):
-        self._db = db
+        self.db = db
 
     def derive_key(self, password: str, salt: bytes, params: Optional[KdfParams] = None) -> bytes:
         if not isinstance(password, str) or not password:
@@ -59,7 +59,7 @@ class KeyManager:
         if not verifier_hash:
             raise ValueError("verifier_hash не может быть пустым")
 
-        with self._db.session() as conn:
+        with self.db.session() as conn:
             conn.execute(
                 """
                 INSERT INTO key_store (key_type, salt, hash, params)
@@ -70,7 +70,7 @@ class KeyManager:
             )
 
     def load_key(self, key_type: str) -> Optional[tuple[bytes, bytes, KdfParams]]:
-        with self._db.session() as conn:
+        with self.db.session() as conn:
             row = conn.execute(
                 "SELECT salt, hash, params FROM key_store WHERE key_type = ?",
                 (key_type,),

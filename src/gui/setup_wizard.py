@@ -35,30 +35,30 @@ class SetupWizard(QWizard):
         self.setWindowTitle("Первоначальная настройка")
         self.setWizardStyle(QWizard.ModernStyle)
 
-        self._cfg_mgr = cfg_mgr
-        self._db = db
-        self._km = key_manager
-        self._state = state
+        self.cfg_mgr = cfg_mgr
+        self.db = db
+        self.km = key_manager
+        self.state = state
 
-        self._page_password = _PasswordPage()
-        self._page_db = _DbPathPage(cfg_mgr)
-        self._page_crypto = _CryptoParamsPage()
+        self.page_password = PasswordPage()
+        self.page_db = DbPathPage(cfg_mgr)
+        self.page_crypto = CryptoParamsPage()
 
-        self.addPage(self._page_password)
-        self.addPage(self._page_db)
-        self.addPage(self._page_crypto)
+        self.addPage(self.page_password)
+        self.addPage(self.page_db)
+        self.addPage(self.page_crypto)
 
-        self.button(QWizard.FinishButton).clicked.connect(self._on_finish_clicked)
+        self.button(QWizard.FinishButton).clicked.connect(self.on_finish_clicked)
 
     @Slot()
-    def _on_finish_clicked(self) -> None:
+    def on_finish_clicked(self) -> None:
         try:
-            password = self._page_password.password()
+            password = self.page_password.password()
         except ValueError as e:
             QMessageBox.warning(self, "Ошибка", str(e))
             return
-        db_path = self._page_db.db_path()
-        iterations = self._page_crypto.iterations()
+        db_path = self.page_db.db_path()
+        iterations = self.page_crypto.iterations()
 
 
         if not db_path:
@@ -66,39 +66,39 @@ class SetupWizard(QWizard):
             return
 
         # Сохраняем bootstrap-конфиг (только путь к БД)
-        cfg = self._cfg_mgr.load()
+        cfg = self.cfg_mgr.load()
         cfg.db_path = Path(db_path)
 
-        self._cfg_mgr.save(cfg)
+        self.cfg_mgr.save(cfg)
 
         # Поднимаем БД и создаём schema.
-        self._db.close()
+        self.db.close()
 
         new_db = Database(cfg.db_path)
         new_db.connect()
 
         # Важно: обновляем ссылки, чтобы KeyManager работал с подключенной БД
-        self._db = new_db
-        self._km = KeyManager(self._db)
+        self.db = new_db
+        self.km = KeyManager(self.db)
 
         # Генерируем salt и сохраняем verifier (Sprint 1).
-        salt = self._km.make_salt(16)
+        salt = self.km.make_salt(16)
         params = KdfParams(iterations=int(iterations))
-        master_key = self._km.derive_key(password, salt, params)
-        verifier = self._km.verifier(master_key)
-        self._km.store_key("master", salt, verifier, params)
+        master_key = self.km.derive_key(password, salt, params)
+        verifier = self.km.verifier(master_key)
+        self.km.store_key("master", salt, verifier, params)
 
         # Разблокируем сессию (Sprint 1).
-        self._state.unlock(master_key)
+        self.state.unlock(master_key)
 
         from core.crypto.placeholder import AES256Placeholder
         from database.repositories import SettingsRepository
 
         crypto = AES256Placeholder()
         settings = SettingsRepository(
-            db=self._db,
+            db=self.db,
             crypto=crypto,
-            key_provider=self._state.get_master_key,
+            key_provider=self.state.get_master_key,
         )
 
         # Sprint 1: базовые настройки (как минимум — placeholders)
@@ -110,25 +110,25 @@ class SetupWizard(QWizard):
         settings.set("crypto.algorithm", "PLACEHOLDER", encrypted=False)
 
 
-class _PasswordPage(QWizardPage):
+class PasswordPage(QWizardPage):
     def __init__(self):
         super().__init__()
         self.setTitle("Мастер-пароль")
         self.setSubTitle("Создай мастер-пароль. Он будет нужен для доступа к базе.")
 
-        self._pwd1 = PasswordEntry("Мастер-пароль")
-        self._pwd2 = PasswordEntry("Подтверждение")
+        self.pwd1 = PasswordEntry("Мастер-пароль")
+        self.pwd2 = PasswordEntry("Подтверждение")
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
-        form.addRow("Пароль:", self._pwd1)
-        form.addRow("Повтори:", self._pwd2)
+        form.addRow("Пароль:", self.pwd1)
+        form.addRow("Повтори:", self.pwd2)
         layout.addLayout(form)
         layout.addWidget(QLabel("Подсказка: используй длинный пароль (12+ символов)."))
 
     def password(self) -> str:
-        p1 = self._pwd1.text()
-        p2 = self._pwd2.text()
+        p1 = self.pwd1.text()
+        p2 = self.pwd2.text()
 
         if not p1:
             raise ValueError("Мастер-пароль не может быть пустым")
@@ -139,52 +139,52 @@ class _PasswordPage(QWizardPage):
         return p1
 
 
-class _DbPathPage(QWizardPage):
+class DbPathPage(QWizardPage):
     def __init__(self, cfg_mgr: ConfigManager):
         super().__init__()
         self.setTitle("Расположение базы")
         self.setSubTitle("Выбери файл локальной базы данных (SQLite).")
 
         cfg = cfg_mgr.load()
-        self._path = QLineEdit(str(cfg.db_path))
-        self._btn = QPushButton("Выбрать…")
-        self._btn.clicked.connect(self._choose)
+        self.path = QLineEdit(str(cfg.db_path))
+        self.btn = QPushButton("Выбрать…")
+        self.btn.clicked.connect(self.choose)
 
         form = QFormLayout()
-        form.addRow("Файл БД:", self._path)
-        form.addRow("", self._btn)
+        form.addRow("Файл БД:", self.path)
+        form.addRow("", self.btn)
 
         layout = QVBoxLayout(self)
         layout.addLayout(form)
 
     @Slot()
-    def _choose(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Файл базы данных", self._path.text(), "SQLite DB (*.db)")
+    def choose(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Файл базы данных", self.path.text(), "SQLite DB (*.db)")
         if path:
-            self._path.setText(path)
+            self.path.setText(path)
 
     def db_path(self) -> str:
-        return self._path.text().strip()
+        return self.path.text().strip()
 
 
-class _CryptoParamsPage(QWizardPage):
+class CryptoParamsPage(QWizardPage):
     def __init__(self):
         super().__init__()
         self.setTitle("Параметры шифрования")
         self.setSubTitle("Заглушка параметров формирования ключа (Sprint 1).")
 
-        self._iterations = QLineEdit("200000")
-        self._iterations.setPlaceholderText("Например: 200000")
+        self.iterations_input = QLineEdit("200000")
+        self.iterations_input.setPlaceholderText("Например: 200000")
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
-        form.addRow("PBKDF2 iterations:", self._iterations)
+        form.addRow("PBKDF2 iterations:", self.iterations_input)
         layout.addLayout(form)
         layout.addWidget(QLabel("В Sprint 2/3 тут будут расширенные настройки."))
 
     def iterations(self) -> int:
         try:
-            v = int(self._iterations.text().strip())
-            return max(50_000, v)
+            v = int(self.iterations_input.text().strip())
+            return max(50000, v)
         except Exception:
-            return 200_000
+            return 200000

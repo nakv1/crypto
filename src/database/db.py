@@ -1,9 +1,11 @@
 import sqlite3
+import os
+import stat
 import threading
 import queue
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator
 
 from database.models import SCHEMA
 
@@ -14,62 +16,61 @@ class Database:
     SCHEMA_VERSION = 2
 
     def __init__(self, db_path: Path):
-        self._db_path = Path(db_path)
-        self._lock = threading.Lock()
-        self._pool: "queue.Queue[sqlite3.Connection]" = queue.Queue()
-        self._pool_size = 4
-        self._initialized = False
-
-        self._conn: Optional[sqlite3.Connection] = None
+        self.db_path = Path(db_path)
+        self.lock = threading.Lock()
+        self.pool: "queue.Queue[sqlite3.Connection]" = queue.Queue()
+        self.pool_size = 4
+        self.initialized = False
 
     def connect(self) -> None:
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with self._lock:
-            if self._initialized:
+        with self.lock:
+            if self.initialized:
                 return
 
             # Создаём пул соединений. check_same_thread=False — соединения могут использоваться разными потоками, но строго по одному потоку за раз.
-            for _ in range(self._pool_size):
-                conn = sqlite3.connect(self._db_path, check_same_thread=False)
+            for _ in range(self.pool_size):
+                conn = sqlite3.connect(self.db_path, check_same_thread=False)
                 conn.row_factory = sqlite3.Row
                 conn.execute("PRAGMA foreign_keys = ON;")
                 conn.execute("PRAGMA journal_mode = WAL;")
                 conn.execute("PRAGMA busy_timeout = 5000;")
                 conn.execute("PRAGMA synchronous = NORMAL;")
-                self._pool.put(conn)
+                self.pool.put(conn)
 
-            # ВАЖНО: помечаем как initialized ДО _ensure_schema(),
-            # иначе session() внутри _ensure_schema() упадёт.
-            self._initialized = True
+            # ВАЖНО: помечаем как initialized ДО ensure_schema(),
+            # иначе session() внутри ensure_schema() упадёт.
+            self.initialized = True
 
             try:
-                self._ensure_schema()
+                self.apply_permissions()
+                self.ensure_schema()
             except Exception:
                 # если схема несовместима/ошибка миграции — закрываем пул и сбрасываем флаг
                 self.close()
                 raise
 
     def close(self) -> None:
-        with self._lock:
-            while not self._pool.empty():
+        with self.lock:
+            while not self.pool.empty():
                 try:
-                    conn = self._pool.get_nowait()
+                    conn = self.pool.get_nowait()
                 except queue.Empty:
                     break
                 try:
                     conn.close()
                 except Exception:
                     pass
-            self._initialized = False
+            self.initialized = False
 
     @contextmanager
     def session(self) -> Iterator[sqlite3.Connection]:
 
-        if not self._initialized:
+        if not self.initialized:
             raise RuntimeError("База данных не подключена. Вызови connect().")
 
-        conn = self._pool.get()
+        conn = self.pool.get()
         try:
             yield conn
             conn.commit()
@@ -77,9 +78,9 @@ class Database:
             conn.rollback()
             raise
         finally:
-            self._pool.put(conn)
+            self.pool.put(conn)
 
-    def _ensure_schema(self) -> None:
+    def ensure_schema(self) -> None:
         with self.session() as conn:
             current_version = conn.execute("PRAGMA user_version;").fetchone()[0]
 
@@ -92,12 +93,18 @@ class Database:
                     f"Несовместимая версия схемы БД: {current_version} (ожидается {self.SCHEMA_VERSION})."
                 )
 
+    def apply_permissions(self) -> None:
+        # Лучшие практики: ограничиваем права на файл БД (не Windows).
+        try:
+            if os.name != "nt" and self.db_path.exists():
+                os.chmod(self.db_path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
+        except Exception:
+            pass
+
     # Заглушки Sprint 1
 
     def backup(self, backup_path: Path) -> None:
-
         raise NotImplementedError("Backup будет реализован в следующих спринтах.")
 
     def restore(self, backup_path: Path) -> None:
-
         raise NotImplementedError("Restore будет реализован в следующих спринтах.")

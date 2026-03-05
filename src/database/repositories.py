@@ -1,4 +1,3 @@
-
 import json
 import base64
 from dataclasses import dataclass
@@ -9,7 +8,7 @@ from database.db import Database
 from core.crypto.abstract import EncryptionService
 
 
-def _now_iso() -> str:
+def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
@@ -26,9 +25,9 @@ class VaultEntry:
 class VaultRepository:
 
     def __init__(self, db: Database, crypto: EncryptionService, key_provider: Callable[[], bytes]):
-        self._db = db
-        self._crypto = crypto
-        self._key_provider = key_provider
+        self.db = db
+        self.crypto = crypto
+        self.key_provider = key_provider
 
     def add(
         self,
@@ -42,14 +41,14 @@ class VaultRepository:
         if not title.strip():
             raise ValueError("Название не может быть пустым")
 
-        key = self._key_provider()
+        key = self.key_provider()
 
-        enc_password = self._crypto.encrypt(password.encode("utf-8"), key)
-        enc_notes = self._crypto.encrypt(notes.encode("utf-8"), key) if notes else None
-        created_at = _now_iso()
+        enc_password = self.crypto.encrypt(password.encode("utf-8"), key)
+        enc_notes = self.crypto.encrypt(notes.encode("utf-8"), key) if notes else None
+        created_at = now_iso()
         updated_at = created_at
 
-        with self._db.session() as conn:
+        with self.db.session() as conn:
             cur = conn.execute(
                 """
                 INSERT INTO vault_entries (title, username, encrypted_password, url, notes, created_at, updated_at, tags)
@@ -60,7 +59,7 @@ class VaultRepository:
             return int(cur.lastrowid)
 
     def list(self) -> List[VaultEntry]:
-        with self._db.session() as conn:
+        with self.db.session() as conn:
             rows = conn.execute(
                 """
                 SELECT id, title, username, url, tags, updated_at
@@ -80,8 +79,9 @@ class VaultRepository:
             )
             for r in rows
         ]
+
     def get_by_id(self, entry_id: int) -> Optional[dict]:
-        with self._db.session() as conn:
+        with self.db.session() as conn:
             row = conn.execute(
                 """
                 SELECT id, title, username, encrypted_password, url, notes, tags, created_at, updated_at
@@ -93,11 +93,11 @@ class VaultRepository:
         if not row:
             return None
 
-        key = self._key_provider()
-        password = self._crypto.decrypt(row["encrypted_password"], key).decode("utf-8", errors="replace")
+        key = self.key_provider()
+        password = self.crypto.decrypt(row["encrypted_password"], key).decode("utf-8", errors="replace")
         notes = ""
         if row["notes"] is not None:
-            notes = self._crypto.decrypt(row["notes"], key).decode("utf-8", errors="replace")
+            notes = self.crypto.decrypt(row["notes"], key).decode("utf-8", errors="replace")
 
         return {
             "id": int(row["id"]),
@@ -124,12 +124,12 @@ class VaultRepository:
         if not title.strip():
             raise ValueError("Название не может быть пустым")
 
-        key = self._key_provider()
-        enc_password = self._crypto.encrypt(password.encode("utf-8"), key)
-        enc_notes = self._crypto.encrypt(notes.encode("utf-8"), key) if notes else None
-        updated_at = _now_iso()
+        key = self.key_provider()
+        enc_password = self.crypto.encrypt(password.encode("utf-8"), key)
+        enc_notes = self.crypto.encrypt(notes.encode("utf-8"), key) if notes else None
+        updated_at = now_iso()
 
-        with self._db.session() as conn:
+        with self.db.session() as conn:
             conn.execute(
                 """
                 UPDATE vault_entries
@@ -140,18 +140,18 @@ class VaultRepository:
             )
 
     def delete(self, entry_id: int) -> None:
-        with self._db.session() as conn:
+        with self.db.session() as conn:
             conn.execute("DELETE FROM vault_entries WHERE id = ?", (entry_id,))
 
 
 class SettingsRepository:
     def __init__(self, db: Database, crypto: EncryptionService, key_provider: Callable[[], bytes]):
-        self._db = db
-        self._crypto = crypto
-        self._key_provider = key_provider
+        self.db = db
+        self.crypto = crypto
+        self.key_provider = key_provider
 
     def get(self, key: str, default: Optional[str] = None) -> Optional[str]:
-        with self._db.session() as conn:
+        with self.db.session() as conn:
             row = conn.execute(
                 "SELECT setting_value, encrypted FROM settings WHERE setting_key = ?",
                 (key,),
@@ -161,13 +161,13 @@ class SettingsRepository:
 
         val = row["setting_value"]
         if int(row["encrypted"] or 0) == 1 and val is not None:
-            key_bytes = self._key_provider()
+            key_bytes = self.key_provider()
             try:
                 ct = base64.b64decode(val)
-                raw = self._crypto.decrypt(ct, key_bytes)
+                raw = self.crypto.decrypt(ct, key_bytes)
             except Exception:
                 # если вдруг в базе уже лежали bytes/BLOB со старой логикой
-                raw = self._crypto.decrypt(val, key_bytes)
+                raw = self.crypto.decrypt(val, key_bytes)
             return raw.decode("utf-8", errors="replace")
         return val
 
@@ -178,10 +178,10 @@ class SettingsRepository:
         store_val = value
         enc_flag = 1 if encrypted else 0
         if encrypted:
-            key_bytes = self._key_provider()
-            ct = self._crypto.encrypt(value.encode("utf-8"), key_bytes)
+            key_bytes = self.key_provider()
+            ct = self.crypto.encrypt(value.encode("utf-8"), key_bytes)
             store_val = base64.b64encode(ct).decode("utf-8")
-        with self._db.session() as conn:
+        with self.db.session() as conn:
             conn.execute(
                 """
                 INSERT INTO settings (setting_key, setting_value, encrypted)
@@ -202,20 +202,20 @@ class AuditRecord:
 
 class AuditRepository:
     def __init__(self, db: Database):
-        self._db = db
+        self.db = db
 
     def write(self, action: str, details: dict, entry_id: Optional[int] = None) -> None:
-        with self._db.session() as conn:
+        with self.db.session() as conn:
             conn.execute(
                 """
                 INSERT INTO audit_log (action, timestamp, entry_id, details, signature)
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                (action, _now_iso(), entry_id, json.dumps(details, ensure_ascii=False), None),
+                (action, now_iso(), entry_id, json.dumps(details, ensure_ascii=False), None),
             )
 
     def last(self, limit: int = 50) -> List[AuditRecord]:
-        with self._db.session() as conn:
+        with self.db.session() as conn:
             rows = conn.execute(
                 """
                 SELECT id, action, details, timestamp
