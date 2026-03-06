@@ -61,8 +61,8 @@ crypto_nak2/
 │  │  ├─ audit_logger.py            # AuditLogger: подписка на события и запись в audit_log
 │  │  ├─ config.py                  # ConfigManager: окружения/пути/параметры
 │  │  ├─ events.py                  # EventBus + типы событий
-│  │  ├─ state_manager.py           # StateManager: lock/clipboard/idle placeholders
-│  │  ├─ key_manager.py             # KeyManager: derive/store/load (базовая реализация)
+│  │  ├─ state_manager.py           # StateManager: lock/unlock сессии и master key
+│  │  ├─ key_manager.py             # KeyManager: PBKDF2 derive/store/load + verifier
 │  │  └─ security.py                # secure wipe и безопасные утилиты (ctypes)
 │  │
 │  ├─ database/                     # SQLite: подключение, схема, репозитории
@@ -71,9 +71,11 @@ crypto_nak2/
 │  │  └─ repositories.py            # Vault/Settings/Audit репозитории
 │  │
 │  ├─ gui/                          # UI (View): PySide6 окна и диалоги
-│  │   ├─ app.py                    # wiring зависимостей, запуск сервисов, показ окна
+│  │   ├─ app.py                    # связывание зависимостей, запуск сервисов, показ окна
+│  │   ├─ entry_dialog.py           # диалог добавления/редактирования записи
+│  │   ├─ login_dialog.py           # диалог ввода мастер-пароля
 │  │   ├─ main_window.py            # главное окно (меню, таблица, статусбар)
-│  │   ├─ setup_wizard.py           # мастер первичной настройки (QWizard)
+│  │   ├─ setup_wizard.py           # мастер первичной настройки (пароль/БД/параметры KDF)
 │  │   ├─ settings_dialog.py        # окно настроек (заглушка, вкладки)
 │  │   └─ widgets/
 │  │     ├─ password_entry.py       # поле пароля + “показать/скрыть”
@@ -87,10 +89,11 @@ crypto_nak2/
 │
 ├─ tests/
 │  ├─ conftest.py                   # фикстуры, тестовая БД
+│  ├─ test_config_manager.py        # тесты ConfigManager (save/load)
 │  ├─ test_crypto.py                # тесты заглушки шифрования
 │  ├─ test_database.py              # тесты схемы/репозиториев
 │  ├─ test_events.py                # тесты EventBus
-│  └─ test_gui_integration.py       # smoke-тесты GUI (wizard + main window)
+│  ├─ test_gui_integration.py       # тесты GUI (wizard + main window)
 │
 │                    
 ├─ README.md                        # описание, roadmap, запуск, архитектура
@@ -98,7 +101,6 @@ crypto_nak2/
 ├─ pytest.ini                       # настройка pytest (pythonpath=src)
 ├─ Dockerfile                       # заглушка (Should)
 └─ docker-compose.yml               # заглушка (Should)
-
 ```
 
 ## ⚙️ Установка / Setup (Windows)
