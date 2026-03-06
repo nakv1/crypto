@@ -71,15 +71,13 @@ class SetupWizard(QWizard):
 
         self.cfg_mgr.save(cfg)
 
-        # Поднимаем БД и создаём schema.
+        # Поднимаем БД и создаём schema (переподключаем текущий объект DB,
+        # чтобы внешние ссылки оставались валидными).
         self.db.close()
-
-        new_db = Database(cfg.db_path)
-        new_db.connect()
-
-        # Важно: обновляем ссылки, чтобы KeyManager работал с подключенной БД
-        self.db = new_db
-        self.km = KeyManager(self.db)
+        self.db.db_path = cfg.db_path
+        self.db.connect()
+        # Важно: KeyManager должен использовать подключённую БД
+        self.km.db = self.db
 
         # Генерируем salt и сохраняем verifier (Sprint 1).
         salt = self.km.make_salt(16)
