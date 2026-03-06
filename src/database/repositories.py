@@ -12,6 +12,18 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def b64_encode(data: bytes) -> str:
+    return base64.b64encode(data).decode("utf-8")
+
+
+def b64_decode(value: object) -> bytes:
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value)
+    if isinstance(value, str):
+        return base64.b64decode(value)
+    raise TypeError("Неподдерживаемый тип для base64-декодирования")
+
+
 @dataclass(frozen=True)
 class VaultEntry:
     id: int
@@ -43,8 +55,8 @@ class VaultRepository:
 
         key = self.key_provider()
 
-        enc_password = self.crypto.encrypt(password.encode("utf-8"), key)
-        enc_notes = self.crypto.encrypt(notes.encode("utf-8"), key) if notes else None
+        enc_password = b64_encode(self.crypto.encrypt(password.encode("utf-8"), key))
+        enc_notes = b64_encode(self.crypto.encrypt(notes.encode("utf-8"), key)) if notes else None
         created_at = now_iso()
         updated_at = created_at
 
@@ -94,10 +106,10 @@ class VaultRepository:
             return None
 
         key = self.key_provider()
-        password = self.crypto.decrypt(row["encrypted_password"], key).decode("utf-8", errors="replace")
+        password = self.crypto.decrypt(b64_decode(row["encrypted_password"]), key).decode("utf-8", errors="replace")
         notes = ""
         if row["notes"] is not None:
-            notes = self.crypto.decrypt(row["notes"], key).decode("utf-8", errors="replace")
+            notes = self.crypto.decrypt(b64_decode(row["notes"]), key).decode("utf-8", errors="replace")
 
         return {
             "id": int(row["id"]),
@@ -125,8 +137,8 @@ class VaultRepository:
             raise ValueError("Название не может быть пустым")
 
         key = self.key_provider()
-        enc_password = self.crypto.encrypt(password.encode("utf-8"), key)
-        enc_notes = self.crypto.encrypt(notes.encode("utf-8"), key) if notes else None
+        enc_password = b64_encode(self.crypto.encrypt(password.encode("utf-8"), key))
+        enc_notes = b64_encode(self.crypto.encrypt(notes.encode("utf-8"), key)) if notes else None
         updated_at = now_iso()
 
         with self.db.session() as conn:

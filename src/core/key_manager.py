@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -59,6 +60,9 @@ class KeyManager:
         if not verifier_hash:
             raise ValueError("verifier_hash не может быть пустым")
 
+        salt_text = base64.b64encode(salt).decode("utf-8")
+        hash_text = base64.b64encode(verifier_hash).decode("utf-8")
+
         with self.db.session() as conn:
             conn.execute(
                 """
@@ -66,7 +70,7 @@ class KeyManager:
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT(key_type) DO UPDATE SET salt=excluded.salt, hash=excluded.hash, params=excluded.params
                 """,
-                (key_type, salt, verifier_hash, params.to_json()),
+                (key_type, salt_text, hash_text, params.to_json()),
             )
 
     def load_key(self, key_type: str) -> Optional[tuple[bytes, bytes, KdfParams]]:
@@ -78,8 +82,10 @@ class KeyManager:
         if not row:
             return None
 
-        salt = row["salt"]
-        h = row["hash"]
+        salt_val = row["salt"]
+        hash_val = row["hash"]
+        salt = bytes(salt_val) if isinstance(salt_val, (bytes, bytearray, memoryview)) else base64.b64decode(salt_val)
+        h = bytes(hash_val) if isinstance(hash_val, (bytes, bytearray, memoryview)) else base64.b64decode(hash_val)
         params = KdfParams.from_json(row["params"] or "")
         return salt, h, params
 

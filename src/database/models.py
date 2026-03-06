@@ -3,9 +3,9 @@ CREATE TABLE IF NOT EXISTS vault_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
     username TEXT,
-    encrypted_password BLOB NOT NULL,
+    encrypted_password TEXT NOT NULL,
     url TEXT,
-    notes BLOB,
+    notes TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     tags TEXT
@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
     timestamp TEXT NOT NULL,
     entry_id INTEGER,
     details TEXT,
-    signature BLOB
+    signature TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp);
@@ -38,8 +38,8 @@ CREATE INDEX IF NOT EXISTS idx_settings_key ON settings(setting_key);
 CREATE TABLE IF NOT EXISTS key_store (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     key_type TEXT NOT NULL UNIQUE,
-    salt BLOB NOT NULL,
-    hash BLOB NOT NULL,
+    salt TEXT NOT NULL,
+    hash TEXT NOT NULL,
     params TEXT
 );
 """
