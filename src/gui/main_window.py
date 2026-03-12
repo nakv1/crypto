@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Callable, Optional
+
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -40,6 +44,7 @@ class MainWindow(QMainWindow):
         audit_repo: AuditRepository,
         vault_repo: VaultRepository,
         settings_repo: SettingsRepository,
+        open_database_handler: Optional[Callable[[Path], tuple[bool, str]]] = None,
     ):
         super().__init__()
         self.bus = bus
@@ -48,6 +53,7 @@ class MainWindow(QMainWindow):
         self.audit = audit_repo
         self.vault = vault_repo
         self.settings = settings_repo
+        self.open_database_handler = open_database_handler
 
         self.setWindowTitle("CryptoSafe Manager by nak")
         self.resize(1100, 650)
@@ -216,6 +222,24 @@ class MainWindow(QMainWindow):
         ]
         self.secure_table.set_rows(rows)
 
+    def apply_runtime_context(
+        self,
+        state: StateManager,
+        auth_service: AuthenticationService,
+        audit_repo: AuditRepository,
+        vault_repo: VaultRepository,
+        settings_repo: SettingsRepository,
+        db_path: Path,
+    ) -> None:
+        self.state = state
+        self.auth = auth_service
+        self.audit = audit_repo
+        self.vault = vault_repo
+        self.settings = settings_repo
+        self.setWindowTitle(f"CryptoSafe Manager by nak - {db_path.name}")
+        self.refresh_status()
+        self.reload_table()
+
     def require_unlocked(self) -> bool:
         self.auth.enforce_session_timeout()
         if not self.state.is_unlocked():
@@ -233,7 +257,29 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def on_open(self) -> None:
-        QMessageBox.information(self, "Sprint 2", "Открытие другой базы будет расширено позже.")
+        if self.open_database_handler is None:
+            QMessageBox.warning(self, "CryptoSafe", "Операция открытия базы сейчас недоступна.")
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Открыть базу данных",
+            "",
+            "SQLite DB (*.db);;All files (*.*)",
+        )
+        if not file_path:
+            return
+
+        ok, message = self.open_database_handler(Path(file_path))
+        if ok:
+            if message:
+                QMessageBox.information(self, "CryptoSafe", message)
+            self.refresh_status()
+            self.reload_table()
+            return
+
+        if message:
+            QMessageBox.warning(self, "CryptoSafe", message)
 
     @Slot()
     def on_backup(self) -> None:
