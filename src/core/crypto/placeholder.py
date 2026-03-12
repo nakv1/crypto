@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+from core.key_manager import KeyManager
+
 from .abstract import EncryptionService
 
 
 class AES256Placeholder(EncryptionService):
-    def encrypt(self, data: bytes, key: bytes) -> bytes:
+    def __init__(self, key_manager: KeyManager):
+        super().__init__(key_manager=key_manager)
+
+    def encrypt_with_key(self, data: bytes, key: bytes) -> bytes:
         return self.xor_data(data, key)
 
-    def decrypt(self, ciphertext: bytes, key: bytes) -> bytes:
+    def decrypt_with_key(self, ciphertext: bytes, key: bytes) -> bytes:
         return self.xor_data(ciphertext, key)
 
     @staticmethod
