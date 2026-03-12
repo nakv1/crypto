@@ -45,4 +45,8 @@ def test_schema_tables_and_columns(tmp_path: Path):
         for c in ["id", "action", "timestamp", "entry_id", "details", "signature"]:
             assert c in audit_cols
 
+        key_cols = columns(conn, "key_store")
+        for c in ["id", "key_type", "key_data", "version", "created_at"]:
+            assert c in key_cols
+
     db.close()

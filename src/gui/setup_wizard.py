@@ -1,24 +1,28 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from PySide6.QtCore import Slot
 from PySide6.QtWidgets import (
-    QWizard,
-    QWizardPage,
-    QVBoxLayout,
+    QFileDialog,
     QFormLayout,
     QLabel,
     QLineEdit,
-    QPushButton,
-    QFileDialog,
     QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+    QWizard,
+    QWizardPage,
 )
 
 from core.config import ConfigManager
-from core.key_manager import KeyManager, KdfParams
-from core.state_manager import StateManager
+from core.crypto.authentication import AuthenticationService
+from core.crypto.key_derivation import Pbkdf2Params
+from core.crypto.placeholder import AES256Placeholder
+from core.key_manager import KeyManager
 from database.db import Database
+from database.repositories import SettingsRepository
 from gui.widgets.password_entry import PasswordEntry
 
 
@@ -28,7 +32,7 @@ class SetupWizard(QWizard):
         cfg_mgr: ConfigManager,
         db: Database,
         key_manager: KeyManager,
-        state: StateManager,
+        auth_service: AuthenticationService,
         parent=None,
     ):
         super().__init__(parent)
@@ -37,8 +41,8 @@ class SetupWizard(QWizard):
 
         self.cfg_mgr = cfg_mgr
         self.db = db
-        self.km = key_manager
-        self.state = state
+        self.key_manager = key_manager
+        self.auth_service = auth_service
 
         self.page_password = PasswordPage()
         self.page_db = DbPathPage(cfg_mgr)
@@ -54,57 +58,67 @@ class SetupWizard(QWizard):
     def on_finish_clicked(self) -> None:
         try:
             password = self.page_password.password()
-        except ValueError as e:
-            QMessageBox.warning(self, "Ошибка", str(e))
+        except ValueError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
             return
-        db_path = self.page_db.db_path()
-        iterations = self.page_crypto.iterations()
 
+        valid, issues = self.key_manager.validate_password_strength(password)
+        if not valid:
+            QMessageBox.warning(self, "Слабый пароль", "\n".join(issues))
+            return
+
+        db_path = self.page_db.db_path()
+        pbkdf2_iterations = self.page_crypto.pbkdf2_iterations()
+        auto_lock_timeout_sec = self.page_crypto.auto_lock_timeout_sec()
+        lock_on_focus_loss = self.page_crypto.lock_on_focus_loss()
 
         if not db_path:
             QMessageBox.warning(self, "Ошибка", "Нужно выбрать путь к базе данных")
             return
 
-        # Сохраняем bootstrap-конфиг (только путь к БД)
         cfg = self.cfg_mgr.load()
         cfg.db_path = Path(db_path)
-
         self.cfg_mgr.save(cfg)
 
-        # Поднимаем БД и создаём schema (переподключаем текущий объект DB,
-        # чтобы внешние ссылки оставались валидными).
         self.db.close()
         self.db.db_path = cfg.db_path
         self.db.connect()
-        # Важно: KeyManager должен использовать подключённую БД
-        self.km.db = self.db
+        self.key_manager.bind_database(self.db)
 
-        # Генерируем salt и сохраняем verifier (Sprint 1).
-        salt = self.km.make_salt(16)
-        params = KdfParams(iterations=int(iterations))
-        master_key = self.km.derive_key(password, salt, params)
-        verifier = self.km.verifier(master_key)
-        self.km.store_key("master", salt, verifier, params)
+        self.key_manager.configure_parameters(
+            pbkdf2_params=Pbkdf2Params(
+                iterations=pbkdf2_iterations,
+                salt_len=self.key_manager.pbkdf2_params.salt_len,
+                key_len=self.key_manager.pbkdf2_params.key_len,
+            )
+        )
+        self.key_manager.set_cache_policy(
+            idle_timeout_sec=auto_lock_timeout_sec,
+            lock_when_inactive=lock_on_focus_loss,
+        )
 
-        # Разблокируем сессию (Sprint 1).
-        self.state.unlock(master_key)
+        self.auth_service.setup_master_password(password, username="user")
 
-        from core.crypto.placeholder import AES256Placeholder
-        from database.repositories import SettingsRepository
-
-        crypto = AES256Placeholder()
+        crypto = AES256Placeholder(self.key_manager)
         settings = SettingsRepository(
             db=self.db,
             crypto=crypto,
-            key_provider=self.state.get_master_key,
         )
-
-        # Sprint 1: базовые настройки (как минимум — placeholders)
         settings.set("ui.clipboard_timeout_sec", "15", encrypted=False)
-        settings.set("security.auto_lock_minutes", "5", encrypted=False)
-
-        # iterations уже хранятся в key_store
-        settings.set("crypto.kdf.iterations", str(int(iterations)), encrypted=False)
+        settings.set("security.auto_lock_timeout_sec", str(auto_lock_timeout_sec), encrypted=False)
+        settings.set("security.lock_on_focus_loss", "1" if lock_on_focus_loss else "0", encrypted=False)
+        settings.set("security.password_policy", json.dumps(self.key_manager.password_policy.to_dict(), ensure_ascii=False), encrypted=False)
+        settings.set(
+            "security.kdf_parameters",
+            json.dumps(
+                {
+                    "argon2": self.key_manager.argon2_params.to_dict(),
+                    "pbkdf2": self.key_manager.pbkdf2_params.to_dict(),
+                },
+                ensure_ascii=False,
+            ),
+            encrypted=False,
+        )
         settings.set("crypto.algorithm", "PLACEHOLDER", encrypted=False)
 
 
@@ -122,7 +136,7 @@ class PasswordPage(QWizardPage):
         form.addRow("Пароль:", self.pwd1)
         form.addRow("Повтори:", self.pwd2)
         layout.addLayout(form)
-        layout.addWidget(QLabel("Подсказка: используй длинный пароль (12+ символов)."))
+        layout.addWidget(QLabel("Подсказка: от 12 символов, буквы в разных регистрах, цифры и спецсимволы."))
 
     def password(self) -> str:
         p1 = self.pwd1.text()
@@ -145,7 +159,7 @@ class DbPathPage(QWizardPage):
 
         cfg = cfg_mgr.load()
         self.path = QLineEdit(str(cfg.db_path))
-        self.btn = QPushButton("Выбрать…")
+        self.btn = QPushButton("Выбрать...")
         self.btn.clicked.connect(self.choose)
 
         form = QFormLayout()
@@ -168,21 +182,39 @@ class DbPathPage(QWizardPage):
 class CryptoParamsPage(QWizardPage):
     def __init__(self):
         super().__init__()
-        self.setTitle("Параметры шифрования")
-        self.setSubTitle("Заглушка параметров формирования ключа (Sprint 1).")
+        self.setTitle("Параметры безопасности")
+        self.setSubTitle("Параметры KDF и авто-блокировки.")
 
-        self.iterations_input = QLineEdit("200000")
-        self.iterations_input.setPlaceholderText("Например: 200000")
+        self.pbkdf2_input = QLineEdit("100000")
+        self.pbkdf2_input.setPlaceholderText("Например: 100000")
+
+        self.auto_lock_input = QLineEdit("3600")
+        self.auto_lock_input.setPlaceholderText("Таймаут в секундах")
+
+        self.focus_lock_input = QLineEdit("1")
+        self.focus_lock_input.setPlaceholderText("1 = включено, 0 = выключено")
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
-        form.addRow("PBKDF2 iterations:", self.iterations_input)
+        form.addRow("PBKDF2 iterations:", self.pbkdf2_input)
+        form.addRow("Auto-lock timeout (sec):", self.auto_lock_input)
+        form.addRow("Lock on focus loss (1/0):", self.focus_lock_input)
         layout.addLayout(form)
-        layout.addWidget(QLabel("В Sprint 2/3 тут будут расширенные настройки."))
+        layout.addWidget(QLabel("Argon2 используется с безопасными параметрами по умолчанию Sprint2."))
 
-    def iterations(self) -> int:
+    def pbkdf2_iterations(self) -> int:
         try:
-            v = int(self.iterations_input.text().strip())
-            return max(50000, v)
+            value = int(self.pbkdf2_input.text().strip())
+            return max(100000, value)
         except Exception:
-            return 200000
+            return 100000
+
+    def auto_lock_timeout_sec(self) -> int:
+        try:
+            value = int(self.auto_lock_input.text().strip())
+            return max(60, value)
+        except Exception:
+            return 3600
+
+    def lock_on_focus_loss(self) -> bool:
+        return self.focus_lock_input.text().strip() != "0"

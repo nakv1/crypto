@@ -1,11 +1,11 @@
-import json
 import base64
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional, List, Callable
+from typing import Callable, List, Optional
 
-from database.db import Database
 from core.crypto.abstract import EncryptionService
+from database.db import Database
 
 
 def now_iso() -> str:
@@ -35,11 +35,9 @@ class VaultEntry:
 
 
 class VaultRepository:
-
-    def __init__(self, db: Database, crypto: EncryptionService, key_provider: Callable[[], bytes]):
+    def __init__(self, db: Database, crypto: EncryptionService):
         self.db = db
         self.crypto = crypto
-        self.key_provider = key_provider
 
     def add(
         self,
@@ -53,10 +51,8 @@ class VaultRepository:
         if not title.strip():
             raise ValueError("Название не может быть пустым")
 
-        key = self.key_provider()
-
-        enc_password = b64_encode(self.crypto.encrypt(password.encode("utf-8"), key))
-        enc_notes = b64_encode(self.crypto.encrypt(notes.encode("utf-8"), key)) if notes else None
+        enc_password = b64_encode(self.crypto.encrypt(password.encode("utf-8")))
+        enc_notes = b64_encode(self.crypto.encrypt(notes.encode("utf-8"))) if notes else None
         created_at = now_iso()
         updated_at = created_at
 
@@ -105,11 +101,10 @@ class VaultRepository:
         if not row:
             return None
 
-        key = self.key_provider()
-        password = self.crypto.decrypt(b64_decode(row["encrypted_password"]), key).decode("utf-8", errors="replace")
+        password = self.crypto.decrypt(b64_decode(row["encrypted_password"])).decode("utf-8", errors="replace")
         notes = ""
         if row["notes"] is not None:
-            notes = self.crypto.decrypt(b64_decode(row["notes"]), key).decode("utf-8", errors="replace")
+            notes = self.crypto.decrypt(b64_decode(row["notes"])).decode("utf-8", errors="replace")
 
         return {
             "id": int(row["id"]),
@@ -136,9 +131,8 @@ class VaultRepository:
         if not title.strip():
             raise ValueError("Название не может быть пустым")
 
-        key = self.key_provider()
-        enc_password = b64_encode(self.crypto.encrypt(password.encode("utf-8"), key))
-        enc_notes = b64_encode(self.crypto.encrypt(notes.encode("utf-8"), key)) if notes else None
+        enc_password = b64_encode(self.crypto.encrypt(password.encode("utf-8")))
+        enc_notes = b64_encode(self.crypto.encrypt(notes.encode("utf-8"))) if notes else None
         updated_at = now_iso()
 
         with self.db.session() as conn:
@@ -155,12 +149,50 @@ class VaultRepository:
         with self.db.session() as conn:
             conn.execute("DELETE FROM vault_entries WHERE id = ?", (entry_id,))
 
+    def reencrypt_all_entries(
+        self,
+        old_key: bytes,
+        new_key: bytes,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> None:
+        with self.db.session() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, encrypted_password, notes
+                FROM vault_entries
+                ORDER BY id
+                """
+            ).fetchall()
+            total = len(rows)
+            if progress_callback is not None:
+                progress_callback(0, total)
+
+            for index, row in enumerate(rows, start=1):
+                plain_password = self.crypto.decrypt_with_key(b64_decode(row["encrypted_password"]), old_key)
+                new_enc_password = b64_encode(self.crypto.encrypt_with_key(plain_password, new_key))
+
+                notes_value = row["notes"]
+                new_enc_notes = None
+                if notes_value is not None:
+                    plain_notes = self.crypto.decrypt_with_key(b64_decode(notes_value), old_key)
+                    new_enc_notes = b64_encode(self.crypto.encrypt_with_key(plain_notes, new_key))
+
+                conn.execute(
+                    """
+                    UPDATE vault_entries
+                    SET encrypted_password = ?, notes = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (new_enc_password, new_enc_notes, now_iso(), int(row["id"])),
+                )
+                if progress_callback is not None:
+                    progress_callback(index, total)
+
 
 class SettingsRepository:
-    def __init__(self, db: Database, crypto: EncryptionService, key_provider: Callable[[], bytes]):
+    def __init__(self, db: Database, crypto: EncryptionService):
         self.db = db
         self.crypto = crypto
-        self.key_provider = key_provider
 
     def get(self, key: str, default: Optional[str] = None) -> Optional[str]:
         with self.db.session() as conn:
@@ -173,13 +205,11 @@ class SettingsRepository:
 
         val = row["setting_value"]
         if int(row["encrypted"] or 0) == 1 and val is not None:
-            key_bytes = self.key_provider()
             try:
                 ct = base64.b64decode(val)
-                raw = self.crypto.decrypt(ct, key_bytes)
+                raw = self.crypto.decrypt(ct)
             except Exception:
-                # если вдруг в базе уже лежали bytes/BLOB со старой логикой
-                raw = self.crypto.decrypt(val, key_bytes)
+                raw = self.crypto.decrypt(val)
             return raw.decode("utf-8", errors="replace")
         return val
 
@@ -190,8 +220,7 @@ class SettingsRepository:
         store_val = value
         enc_flag = 1 if encrypted else 0
         if encrypted:
-            key_bytes = self.key_provider()
-            ct = self.crypto.encrypt(value.encode("utf-8"), key_bytes)
+            ct = self.crypto.encrypt(value.encode("utf-8"))
             store_val = base64.b64encode(ct).decode("utf-8")
         with self.db.session() as conn:
             conn.execute(

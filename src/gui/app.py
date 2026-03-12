@@ -3,74 +3,57 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from PySide6.QtWidgets import QApplication, QMessageBox, QDialog
-
-from core.crypto.placeholder import AES256Placeholder
-from core.key_manager import KeyManager
-from gui.login_dialog import LoginDialog
-from gui.setup_wizard import SetupWizard
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from core.audit_logger import AuditLogger
 from core.config import ConfigManager
-from core.events import EventBus, UserLoggedIn, UserLoggedOut
+from core.crypto.authentication import AuthenticationService
+from core.crypto.placeholder import AES256Placeholder
+from core.events import EventBus
+from core.key_manager import KeyManager
 from core.state_manager import StateManager
 from database.db import Database
 from database.repositories import AuditRepository, SettingsRepository, VaultRepository
+from gui.login_dialog import LoginDialog
 from gui.main_window import MainWindow
+from gui.setup_wizard import SetupWizard
 
 
 class CryptoSafeApp:
     def run(self, app: QApplication) -> int:
-        # 1) Загружаем конфигурацию приложения
         cfg_mgr = ConfigManager()
         cfg = cfg_mgr.load()
 
-        # 2) Приоритет пути к БД:
         env_db_path = os.getenv("CRYPTOSAFE_DB_PATH")
         db_path = env_db_path or str(cfg.db_path)
 
-        # 3) Инициализация сервисов
-        # База данных
         db = Database(Path(db_path))
         db.connect()
-        # Шина событий
+
         bus = EventBus()
-
-        # Менеджер состояния
         state = StateManager()
-
         key_manager = KeyManager(db)
-        master_key_record = key_manager.load_key("master")
+        crypto = AES256Placeholder(key_manager)
+        auth = AuthenticationService(key_manager=key_manager, state=state, bus=bus)
 
+        audit_repo = AuditRepository(db)
+        audit = AuditLogger(bus, audit_repo)
+        audit.start()
 
-        if master_key_record is None:
+        if not auth.has_master_password():
             wizard = SetupWizard(
                 cfg_mgr=cfg_mgr,
                 db=db,
                 key_manager=key_manager,
-                state=state,
+                auth_service=auth,
             )
             result = wizard.exec()
-
             if result != QDialog.Accepted:
-                QMessageBox.critical(
-                    None,
-                    "CryptoSafe",
-                    "Setup не завершён. Приложение будет закрыто."
-                )
+                QMessageBox.critical(None, "CryptoSafe", "Setup не завершен. Приложение будет закрыто.")
                 return 0
-
-            # Мастер мог создать БД в новом месте. Переподключаемся.
-            cfg = cfg_mgr.load()
-            try:
-                db.close()
-            except Exception:
-                pass
-            db = Database(Path(cfg.db_path))
-            db.connect()
-            key_manager = KeyManager(db)
         else:
-            for _ in range(3):
+            while True:
                 dlg = LoginDialog()
                 if dlg.exec() != QDialog.Accepted:
                     return 0
@@ -78,54 +61,51 @@ class CryptoSafeApp:
                 if not password:
                     QMessageBox.warning(None, "CryptoSafe", "Пароль не может быть пустым.")
                     continue
-                salt, verifier, params = master_key_record
-                try:
-                    key = key_manager.derive_key(password, salt, params)
-                except Exception:
-                    QMessageBox.warning(None, "CryptoSafe", "Не удалось проверить пароль.")
-                    continue
-                if key_manager.verifier(key) != verifier:
-                    QMessageBox.warning(None, "CryptoSafe", "Неверный пароль.")
-                    continue
-                state.unlock(key)
-                break
-            if not state.is_unlocked():
-                QMessageBox.critical(None, "CryptoSafe", "Доступ к хранилищу не получен.")
-                return 0
 
-        crypto = AES256Placeholder()
-        vault_repo = VaultRepository(db=db, crypto=crypto, key_provider=state.get_master_key)
-        settings_repo = SettingsRepository(db=db, crypto=crypto, key_provider=state.get_master_key)
-        # Репозиторий аудита
-        audit_repo = AuditRepository(db)
+                result = auth.authenticate(password=password, username="user")
+                if result.success:
+                    break
 
-        # Логгер аудита (подписывается на события)
-        audit = AuditLogger(bus, audit_repo)
-        audit.start()
+                QMessageBox.warning(
+                    None,
+                    "CryptoSafe",
+                    f"{result.message} Следующая попытка через {result.delay_sec} сек.",
+                )
+                auth.apply_backoff_delay(result.delay_sec)
 
-        if state.is_unlocked():
-            bus.publish(UserLoggedIn(username=state.username()))
+        vault_repo = VaultRepository(db=db, crypto=crypto)
+        settings_repo = SettingsRepository(db=db, crypto=crypto)
 
-        # Главное окно приложения
+        try:
+            timeout_raw = settings_repo.get("security.auto_lock_timeout_sec", "3600") or "3600"
+            timeout_val = max(60, int(timeout_raw))
+        except Exception:
+            timeout_val = 3600
+        focus_raw = settings_repo.get("security.lock_on_focus_loss", "1") or "1"
+        lock_on_focus = str(focus_raw).strip() != "0"
+        key_manager.set_cache_policy(idle_timeout_sec=timeout_val, lock_when_inactive=lock_on_focus)
+
         main = MainWindow(
             bus=bus,
             state=state,
+            auth_service=auth,
             audit_repo=audit_repo,
             vault_repo=vault_repo,
             settings_repo=settings_repo,
         )
         main.show()
 
-        # Главный цикл Qt + гарантированное освобождение ресурсов
+        def on_app_state_changed(new_state) -> None:
+            auth.handle_application_activity(new_state == Qt.ApplicationActive)
+
+        app.applicationStateChanged.connect(on_app_state_changed)
+
         try:
             code = app.exec()
             return int(code)
         finally:
-            # Корректно останавливаем EventBus
             try:
-                if state.is_unlocked():
-                    bus.publish(UserLoggedOut(username=state.username()))
+                auth.logout(emit_event=True)
                 bus.shutdown()
             finally:
-                # Закрываем базу данных в любом случае
                 db.close()

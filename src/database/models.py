@@ -37,9 +37,12 @@ CREATE INDEX IF NOT EXISTS idx_settings_key ON settings(setting_key);
 
 CREATE TABLE IF NOT EXISTS key_store (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    key_type TEXT NOT NULL UNIQUE,
-    salt TEXT NOT NULL,
-    hash TEXT NOT NULL,
-    params TEXT
+    key_type TEXT NOT NULL,
+    key_data TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP NOT NULL,
+    UNIQUE(key_type, version)
 );
+
+CREATE INDEX IF NOT EXISTS idx_key_store_type ON key_store(key_type);
 """

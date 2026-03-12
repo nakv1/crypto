@@ -2,26 +2,29 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
-    QMainWindow,
-    QWidget,
-    QSplitter,
-    QVBoxLayout,
+    QApplication,
+    QDialog,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QProgressDialog,
+    QPushButton,
+    QSplitter,
+    QStatusBar,
+    QToolBar,
     QTreeWidget,
     QTreeWidgetItem,
-    QToolBar,
-    QStatusBar,
-    QLabel,
-    QMessageBox,
-    QPushButton,
-    QDialog,
-    QApplication,
+    QVBoxLayout,
+    QWidget,
 )
 
-from core.events import EventBus, EntryAdded, EntryDeleted, EntryUpdated, ClipboardCopied
+from core.crypto.authentication import AuthenticationService
+from core.events import ClipboardCopied, EntryAdded, EntryDeleted, EntryUpdated, EventBus
 from core.state_manager import StateManager
 from database.repositories import AuditRepository, SettingsRepository, VaultRepository
+from gui.change_password_dialog import ChangePasswordDialog
 from gui.entry_dialog import EntryDialog, EntryFormData
 from gui.settings_dialog import SettingsDialog
 from gui.widgets.audit_log_viewer import AuditLogViewer
@@ -33,6 +36,7 @@ class MainWindow(QMainWindow):
         self,
         bus: EventBus,
         state: StateManager,
+        auth_service: AuthenticationService,
         audit_repo: AuditRepository,
         vault_repo: VaultRepository,
         settings_repo: SettingsRepository,
@@ -40,6 +44,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.bus = bus
         self.state = state
+        self.auth = auth_service
         self.audit = audit_repo
         self.vault = vault_repo
         self.settings = settings_repo
@@ -59,6 +64,7 @@ class MainWindow(QMainWindow):
         act_new = m_file.addAction("Создать")
         act_open = m_file.addAction("Открыть")
         act_backup = m_file.addAction("Резервная копия")
+        act_change_password = m_file.addAction("Сменить мастер-пароль")
         m_file.addSeparator()
         act_exit = m_file.addAction("Выход")
 
@@ -77,6 +83,7 @@ class MainWindow(QMainWindow):
         act_new.triggered.connect(self.on_new)
         act_open.triggered.connect(self.on_open)
         act_backup.triggered.connect(self.on_backup)
+        act_change_password.triggered.connect(self.on_change_master_password)
         act_exit.triggered.connect(self.close)
 
         act_add.triggered.connect(self.on_add)
@@ -88,7 +95,6 @@ class MainWindow(QMainWindow):
         act_about.triggered.connect(self.on_about)
 
     def build_ui(self) -> None:
-        # Верхняя панель действий (быстрый доступ)
         tb = QToolBar("Действия")
         tb.setMovable(False)
         self.addToolBar(tb)
@@ -99,8 +105,8 @@ class MainWindow(QMainWindow):
         btn_copy = QPushButton("Копировать пароль")
         btn_settings = QPushButton("Настройки")
 
-        for b in (btn_add, btn_edit, btn_del, btn_copy):
-            tb.addWidget(b)
+        for btn in (btn_add, btn_edit, btn_del, btn_copy):
+            tb.addWidget(btn)
         tb.addSeparator()
         tb.addWidget(btn_settings)
 
@@ -110,21 +116,19 @@ class MainWindow(QMainWindow):
         btn_copy.clicked.connect(self.on_copy_password)
         btn_settings.clicked.connect(self.on_settings)
 
-        # Центральная часть слева дерево + поиск, справа таблица
         root = QWidget()
         self.setCentralWidget(root)
 
         splitter = QSplitter(Qt.Horizontal, root)
         splitter.setChildrenCollapsible(False)
 
-        # Левая панель
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(8, 8, 8, 8)
         left_layout.setSpacing(8)
 
         self.txt_search = QLineEdit()
-        self.txt_search.setPlaceholderText("Поиск…")
+        self.txt_search.setPlaceholderText("Поиск...")
         self.txt_search.textChanged.connect(self.on_search_changed)
 
         self.tree_groups = QTreeWidget()
@@ -134,7 +138,6 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.txt_search)
         left_layout.addWidget(self.tree_groups)
 
-        # Правая панель
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(8, 8, 8, 8)
@@ -151,7 +154,6 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(splitter)
 
-        # Статусбар
         sb = QStatusBar()
         self.setStatusBar(sb)
         self.lbl_vault = QLabel("Хранилище: закрыто")
@@ -162,7 +164,6 @@ class MainWindow(QMainWindow):
         self.refresh_status()
 
     def fill_demo_data(self) -> None:
-        # Группы (Sprint 1: демо)
         root = QTreeWidgetItem(["Все записи"])
         work = QTreeWidgetItem(["Работа"])
         personal = QTreeWidgetItem(["Личное"])
@@ -172,9 +173,8 @@ class MainWindow(QMainWindow):
         self.tree_groups.expandAll()
         self.tree_groups.setCurrentItem(root)
 
-        # Таблица (Sprint 1: тестовые записи)
         try:
-            if not self.vault.list():
+            if self.state.is_unlocked() and not self.vault.list():
                 self.vault.add(
                     title="GitHub (demo)",
                     username="demo",
@@ -194,14 +194,13 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-        # Заглушка таймера буфера
-        self.lbl_clip.setText("Буфер: очистка таймером (заглушка Sprint 1)")
+        self.lbl_clip.setText("Буфер: очистка таймером (Sprint 2)")
 
     def refresh_status(self) -> None:
         if self.state.is_unlocked():
             self.lbl_vault.setText("Хранилище: открыто")
         else:
-            self.lbl_vault.setText("Хранилище: закрыто (Sprint 1)")
+            self.lbl_vault.setText("Хранилище: закрыто")
 
     def reload_table(self) -> None:
         rows = [
@@ -218,27 +217,27 @@ class MainWindow(QMainWindow):
         self.secure_table.set_rows(rows)
 
     def require_unlocked(self) -> bool:
+        self.auth.enforce_session_timeout()
         if not self.state.is_unlocked():
             QMessageBox.warning(self, "CryptoSafe", "Хранилище закрыто. Нужен мастер-пароль.")
+            self.refresh_status()
             return False
         return True
 
     def selected_entry_id(self) -> int | None:
         return self.secure_table.selected_entry_id()
 
-    # Действия меню/кнопок
-
     @Slot()
     def on_new(self) -> None:
-        QMessageBox.information(self, "Sprint 1", "Создание новой базы будет расширено в Sprint 2.")
+        QMessageBox.information(self, "Sprint 2", "Создание новой базы будет расширено в следующих спринтах.")
 
     @Slot()
     def on_open(self) -> None:
-        QMessageBox.information(self, "Sprint 1", "Открытие/логин будет реализовано в Sprint 2.")
+        QMessageBox.information(self, "Sprint 2", "Открытие другой базы будет расширено позже.")
 
     @Slot()
     def on_backup(self) -> None:
-        QMessageBox.information(self, "Sprint 1", "Резервное копирование — заглушка (Sprint 8).")
+        QMessageBox.information(self, "Sprint 2", "Резервное копирование — заглушка (Sprint 8).")
 
     @Slot()
     def on_add(self) -> None:
@@ -259,6 +258,7 @@ class MainWindow(QMainWindow):
             notes=data.notes,
             tags=data.tags,
         )
+        self.auth.record_activity()
         self.bus.publish(EntryAdded(title=data.title), async_mode=True)
         self.reload_table()
 
@@ -298,6 +298,7 @@ class MainWindow(QMainWindow):
             notes=data.notes,
             tags=data.tags,
         )
+        self.auth.record_activity()
         self.bus.publish(EntryUpdated(title=data.title), async_mode=True)
         self.reload_table()
 
@@ -320,6 +321,7 @@ class MainWindow(QMainWindow):
         ) != QMessageBox.Yes:
             return
         self.vault.delete(entry_id)
+        self.auth.record_activity()
         self.bus.publish(EntryDeleted(title=row["title"]), async_mode=True)
         self.reload_table()
 
@@ -339,7 +341,56 @@ class MainWindow(QMainWindow):
         clipboard.setText(row["password"])
         timeout = self.settings.get("ui.clipboard_timeout_sec", "15")
         self.lbl_clip.setText(f"Буфер: пароль скопирован (очистка через {timeout} сек.)")
+        self.auth.record_activity()
         self.bus.publish(ClipboardCopied(entry_id=entry_id), async_mode=True)
+
+    @Slot()
+    def on_change_master_password(self) -> None:
+        if not self.require_unlocked():
+            return
+
+        dlg = ChangePasswordDialog(self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        data = dlg.data()
+        if not data.current_password or not data.new_password:
+            QMessageBox.warning(self, "CryptoSafe", "Заполни все поля пароля.")
+            return
+        if data.new_password != data.confirm_password:
+            QMessageBox.warning(self, "CryptoSafe", "Новый пароль и подтверждение не совпадают.")
+            return
+
+        progress = QProgressDialog("Перешифрование хранилища...", "", 0, 100, self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setCancelButton(None)
+        progress.setValue(0)
+        progress.show()
+
+        def update_progress(current: int, total: int) -> None:
+            if total <= 0:
+                progress.setValue(100)
+            else:
+                percent = int((current * 100) / total)
+                progress.setValue(min(100, max(0, percent)))
+            QApplication.processEvents()
+
+        try:
+            self.auth.change_master_password(
+                current_password=data.current_password,
+                new_password=data.new_password,
+                db=self.vault.db,
+                crypto=self.vault.crypto,
+                progress_callback=update_progress,
+            )
+            progress.setValue(100)
+            self.auth.record_activity()
+            QMessageBox.information(self, "CryptoSafe", "Мастер-пароль успешно изменен.")
+            self.reload_table()
+        except Exception as exc:
+            QMessageBox.warning(self, "CryptoSafe", f"Смена пароля не выполнена: {exc}")
+        finally:
+            progress.close()
 
     @Slot()
     def on_settings(self) -> None:
@@ -353,10 +404,9 @@ class MainWindow(QMainWindow):
 
         viewer = AuditLogViewer(dlg)
 
-        # Sprint 1: просто вывод последних записей как текст.
         lines = []
-        for r in self.audit.last(100):
-            lines.append(f"{r.timestamp} | {r.action} | {r.details}")
+        for row in self.audit.last(100):
+            lines.append(f"{row.timestamp} | {row.action} | {row.details}")
         viewer.set_text("\n".join(lines) if lines else "Пока пусто")
 
         layout = QVBoxLayout(dlg)
@@ -369,18 +419,14 @@ class MainWindow(QMainWindow):
             self,
             "CryptoSafe Manager",
             "CryptoSafe Manager - менеджер паролей.\n"
-            "Спринт 1: фундамент (архитектура, БД, события, оболочка GUI).\n"
+            "Спринт 2: мастер-пароль, Argon2/PBKDF2, управление сессией.\n"
             "By nak",
         )
 
-    # Заглушки фильтрации
-
     @Slot(str)
     def on_search_changed(self, text: str) -> None:
-        # Sprint 1: заглушка поиска
         del text
 
     @Slot()
     def on_group_changed(self) -> None:
-        # Sprint 1: заглушка фильтра по группам
         pass

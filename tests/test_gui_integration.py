@@ -4,18 +4,20 @@ import sys
 from pathlib import Path
 
 import pytest
+
 pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication
 
 from core.config import ConfigManager
+from core.crypto.authentication import AuthenticationService
+from core.crypto.placeholder import AES256Placeholder
+from core.events import EventBus
 from core.key_manager import KeyManager
 from core.state_manager import StateManager
-from core.events import EventBus
 from database.db import Database
 from database.repositories import AuditRepository, SettingsRepository, VaultRepository
 from gui.main_window import MainWindow
 from gui.setup_wizard import SetupWizard
-from core.crypto.placeholder import AES256Placeholder
 
 
 @pytest.fixture
@@ -25,7 +27,6 @@ def qapp():
 
 
 def test_setup_wizard_creates_keystore(tmp_path: Path, qapp, monkeypatch):
-    # Подменяем HOME, чтобы ConfigManager писал конфиг в tmp.
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     cfg_mgr = ConfigManager(env="test")
@@ -37,17 +38,19 @@ def test_setup_wizard_creates_keystore(tmp_path: Path, qapp, monkeypatch):
     db.connect()
     km = KeyManager(db)
     state = StateManager()
+    auth = AuthenticationService(key_manager=km, state=state)
 
-    wiz = SetupWizard(cfg_mgr, db, km, state)
-    # Заполняем страницы напрямую.
-    wiz.page_password.pwd1.setText("StrongPassword123")
-    wiz.page_password.pwd2.setText("StrongPassword123")
+    wiz = SetupWizard(cfg_mgr, db, km, auth)
+    wiz.page_password.pwd1.setText("UltraSafeA1!Key")
+    wiz.page_password.pwd2.setText("UltraSafeA1!Key")
     wiz.page_db.path.setText(str(cfg.db_path))
-    wiz.page_crypto.iterations_input.setText("200000")
+    wiz.page_crypto.pbkdf2_input.setText("100000")
+    wiz.page_crypto.auto_lock_input.setText("3600")
+    wiz.page_crypto.focus_lock_input.setText("1")
     wiz.on_finish_clicked()
 
     assert state.is_unlocked()
-    assert km.load_key("master") is not None
+    assert km.is_master_password_configured()
 
     db.close()
 
@@ -56,23 +59,28 @@ def test_main_window_launch(tmp_path: Path, qapp):
     db = Database(tmp_path / "vault.db")
     db.connect()
     audit = AuditRepository(db)
-
     bus = EventBus()
-    state = StateManager()
-    crypto = AES256Placeholder()
-    vault_repo = VaultRepository(db=db, crypto=crypto, key_provider=state.get_master_key)
-    settings_repo = SettingsRepository(db=db, crypto=crypto, key_provider=state.get_master_key)
 
-    w = MainWindow(
+    state = StateManager()
+    km = KeyManager(db)
+    auth = AuthenticationService(key_manager=km, state=state, bus=bus)
+    auth.setup_master_password("UltraSafeA1!Key", username="nak")
+
+    crypto = AES256Placeholder(km)
+    vault_repo = VaultRepository(db=db, crypto=crypto)
+    settings_repo = SettingsRepository(db=db, crypto=crypto)
+
+    window = MainWindow(
         bus=bus,
         state=state,
+        auth_service=auth,
         audit_repo=audit,
         vault_repo=vault_repo,
         settings_repo=settings_repo,
     )
-    w.show()
-    assert w.menuBar() is not None
-    w.close()
+    window.show()
+    assert window.menuBar() is not None
+    window.close()
 
     bus.shutdown()
     db.close()
