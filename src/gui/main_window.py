@@ -30,6 +30,7 @@ from core.state_manager import StateManager
 from database.repositories import AuditRepository, SettingsRepository, VaultRepository
 from gui.change_password_dialog import ChangePasswordDialog
 from gui.entry_dialog import EntryDialog, EntryFormData
+from gui.login_dialog import LoginDialog
 from gui.settings_dialog import SettingsDialog
 from gui.widgets.audit_log_viewer import AuditLogViewer
 from gui.widgets.secure_table import SecureTable, VaultRow
@@ -242,11 +243,35 @@ class MainWindow(QMainWindow):
 
     def require_unlocked(self) -> bool:
         self.auth.enforce_session_timeout()
-        if not self.state.is_unlocked():
-            QMessageBox.warning(self, "CryptoSafe", "Хранилище закрыто. Нужен мастер-пароль.")
+        if self.state.is_unlocked():
+            return True
+
+        if self.prompt_relogin():
             self.refresh_status()
-            return False
-        return True
+            return True
+
+        self.refresh_status()
+        QMessageBox.warning(self, "CryptoSafe", "Хранилище закрыто. Нужен мастер-пароль.")
+        return False
+
+    def prompt_relogin(self) -> bool:
+        while True:
+            dlg = LoginDialog(self)
+            if dlg.exec() != QDialog.Accepted:
+                return False
+            password = dlg.password()
+            if not password:
+                QMessageBox.warning(self, "CryptoSafe", "Пароль не может быть пустым.")
+                continue
+            result = self.auth.authenticate(password=password, username=self.state.username() or "user")
+            if result.success:
+                return True
+            QMessageBox.warning(
+                self,
+                "CryptoSafe",
+                f"{result.message} Следующая попытка через {result.delay_sec} сек.",
+            )
+            self.auth.apply_backoff_delay(result.delay_sec)
 
     def selected_entry_id(self) -> int | None:
         return self.secure_table.selected_entry_id()
