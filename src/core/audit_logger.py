@@ -1,6 +1,7 @@
 from core.events import (
     EventBus,
     EntryAdded,
+    EntryCreated,
     EntryUpdated,
     EntryDeleted,
     UserLoggedIn,
@@ -19,6 +20,7 @@ class AuditLogger:
 
     def start(self) -> None:
         self.bus.subscribe(EntryAdded, self.on_entry_added)
+        self.bus.subscribe(EntryCreated, self.on_entry_created)
         self.bus.subscribe(EntryUpdated, self.on_entry_updated)
         self.bus.subscribe(EntryDeleted, self.on_entry_deleted)
         self.bus.subscribe(UserLoggedIn, self.on_user_logged_in)
@@ -29,11 +31,14 @@ class AuditLogger:
     def on_entry_added(self, e: EntryAdded) -> None:
         self.audit.write("EntryAdded", {"title": e.title})
 
+    def on_entry_created(self, e: EntryCreated) -> None:
+        self.audit.write("EntryCreated", {"entry_id": e.entry_id, "title": e.title})
+
     def on_entry_deleted(self, e: EntryDeleted) -> None:
-        self.audit.write("EntryDeleted", {"title": e.title})
+        self.audit.write("EntryDeleted", {"entry_id": e.entry_id, "title": e.title})
 
     def on_entry_updated(self, e: EntryUpdated) -> None:
-        self.audit.write("EntryUpdated", {"title": e.title})
+        self.audit.write("EntryUpdated", {"entry_id": e.entry_id, "title": e.title})
 
     def on_user_logged_in(self, e: UserLoggedIn) -> None:
         self.audit.write("UserLoggedIn", {"username": e.username})
