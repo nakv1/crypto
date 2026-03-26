@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Slot
+from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QToolButton
 
 
@@ -11,11 +11,14 @@ class PasswordEntry(QWidget):
         self.edit = QLineEdit()
         self.edit.setPlaceholderText(placeholder)
         self.edit.setEchoMode(QLineEdit.Password)
+        self.setFocusProxy(self.edit)
+        self.setFocusPolicy(Qt.StrongFocus)
 
         self.btn = QToolButton()
         self.btn.setText("👁")
         self.btn.setToolTip("Показать/скрыть")
         self.btn.setCheckable(True)
+        self.btn.setFocusPolicy(Qt.NoFocus)
         self.btn.toggled.connect(self.on_toggled)
 
         layout = QHBoxLayout(self)
