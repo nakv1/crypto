@@ -231,6 +231,21 @@ class KeyManager:
     def verifier(key: bytes) -> bytes:
         return hashlib.sha256(key).digest()
 
+    @staticmethod
+    def encode_key_data_for_storage(key_data: bytes) -> str:
+        return base64.b64encode(bytes(key_data)).decode("utf-8")
+
+    @staticmethod
+    def decode_key_data_from_storage(raw_value: object) -> Optional[bytes]:
+        if isinstance(raw_value, (bytes, bytearray, memoryview)):
+            return bytes(raw_value)
+        if isinstance(raw_value, str):
+            try:
+                return base64.b64decode(raw_value.encode("utf-8"), validate=True)
+            except Exception:
+                return raw_value.encode("utf-8")
+        return None
+
     def store_key_data(self, key_type: str, key_data: bytes, version: int = 1) -> None:
         with self.db.session() as conn:
             self.store_key_data_with_connection(conn, key_type, key_data, version)
@@ -250,7 +265,12 @@ class KeyManager:
             ON CONFLICT(key_type, version)
             DO UPDATE SET key_data = excluded.key_data, created_at = excluded.created_at
             """,
-            (key_type, bytes(key_data), int(version), utc_now_iso()),
+            (
+                key_type,
+                self.encode_key_data_for_storage(bytes(key_data)),
+                int(version),
+                utc_now_iso(),
+            ),
         )
 
     def load_key_data(self, key_type: str, version: Optional[int] = None) -> Optional[bytes]:
@@ -270,12 +290,7 @@ class KeyManager:
         if row is None:
             return None
 
-        val = row["key_data"]
-        if isinstance(val, (bytes, bytearray, memoryview)):
-            return bytes(val)
-        if isinstance(val, str):
-            return val.encode("utf-8")
-        return None
+        return self.decode_key_data_from_storage(row["key_data"])
 
     def refresh_parameters_from_storage_if_exists(self) -> None:
         raw = self.load_key_data(self.params_key_type)
