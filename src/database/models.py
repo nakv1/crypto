@@ -1,9 +1,10 @@
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS vault_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL,
+    encrypted_data TEXT NOT NULL,
+    title TEXT,
     username TEXT,
-    encrypted_password TEXT NOT NULL,
+    encrypted_password TEXT,
     url TEXT,
     notes TEXT,
     created_at TEXT NOT NULL,
@@ -12,8 +13,23 @@ CREATE TABLE IF NOT EXISTS vault_entries (
 );
 
 CREATE INDEX IF NOT EXISTS idx_vault_title ON vault_entries(title);
+CREATE INDEX IF NOT EXISTS idx_vault_created_at ON vault_entries(created_at);
 CREATE INDEX IF NOT EXISTS idx_vault_updated_at ON vault_entries(updated_at);
 CREATE INDEX IF NOT EXISTS idx_vault_username ON vault_entries(username);
+CREATE INDEX IF NOT EXISTS idx_vault_tags ON vault_entries(tags);
+
+CREATE TABLE IF NOT EXISTS deleted_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_entry_id INTEGER NOT NULL,
+    encrypted_data TEXT NOT NULL,
+    tags TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_deleted_entries_expires_at ON deleted_entries(expires_at);
 
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
