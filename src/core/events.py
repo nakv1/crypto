@@ -19,13 +19,21 @@ class EntryAdded(Event):
 
 
 @dataclass(frozen=True)
+class EntryCreated(Event):
+    entry_id: int
+    title: str = ""
+
+
+@dataclass(frozen=True)
 class EntryUpdated(Event):
     title: str
+    entry_id: Optional[int] = None
 
 
 @dataclass(frozen=True)
 class EntryDeleted(Event):
     title: str
+    entry_id: Optional[int] = None
 
 
 @dataclass(frozen=True)
