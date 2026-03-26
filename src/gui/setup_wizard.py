@@ -119,7 +119,7 @@ class SetupWizard(QWizard):
             ),
             encrypted=False,
         )
-        settings.set("crypto.algorithm", "PLACEHOLDER", encrypted=False)
+        settings.set("crypto.algorithm", "AES-256-GCM", encrypted=False)
 
 
 class PasswordPage(QWizardPage):
