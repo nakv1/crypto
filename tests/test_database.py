@@ -23,6 +23,7 @@ def test_schema_tables_and_columns(tmp_path: Path):
         }
 
         assert "vault_entries" in tables
+        assert "deleted_entries" in tables
         assert "audit_log" in tables
         assert "settings" in tables
         assert "key_store" in tables
@@ -30,6 +31,7 @@ def test_schema_tables_and_columns(tmp_path: Path):
         vault_cols = columns(conn, "vault_entries")
         for c in [
             "id",
+            "encrypted_data",
             "title",
             "username",
             "encrypted_password",
@@ -40,6 +42,19 @@ def test_schema_tables_and_columns(tmp_path: Path):
             "tags",
         ]:
             assert c in vault_cols
+
+        deleted_cols = columns(conn, "deleted_entries")
+        for c in [
+            "id",
+            "source_entry_id",
+            "encrypted_data",
+            "tags",
+            "created_at",
+            "updated_at",
+            "deleted_at",
+            "expires_at",
+        ]:
+            assert c in deleted_cols
 
         audit_cols = columns(conn, "audit_log")
         for c in ["id", "action", "timestamp", "entry_id", "details", "signature"]:

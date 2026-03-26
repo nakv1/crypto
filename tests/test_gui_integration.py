@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -82,5 +83,140 @@ def test_main_window_launch(tmp_path: Path, qapp):
     assert window.menuBar() is not None
     window.close()
 
+    bus.shutdown()
+    db.close()
+
+
+def test_main_window_search_history_keeps_last10(tmp_path: Path, qapp):
+    del qapp
+    db = Database(tmp_path / "vault.db")
+    db.connect()
+    audit = AuditRepository(db)
+    bus = EventBus()
+
+    state = StateManager()
+    km = KeyManager(db)
+    auth = AuthenticationService(key_manager=km, state=state, bus=bus)
+    auth.setup_master_password("UltraSafeA1!Key", username="nak")
+    crypto = AES256Placeholder(km)
+    vault_repo = VaultRepository(db=db, crypto=crypto)
+    settings_repo = SettingsRepository(db=db, crypto=crypto)
+
+    window = MainWindow(
+        bus=bus,
+        state=state,
+        auth_service=auth,
+        audit_repo=audit,
+        vault_repo=vault_repo,
+        settings_repo=settings_repo,
+    )
+
+    for index in range(12):
+        window.push_search_history(f"query-{index}")
+
+    assert len(window.search_history) == 10
+    assert window.search_history[0] == "query-11"
+    assert window.search_history[-1] == "query-2"
+
+    stored = settings_repo.get("ui.search_history", "[]") or "[]"
+    parsed = json.loads(stored)
+    assert isinstance(parsed, list)
+    assert len(parsed) == 10
+    assert parsed[0] == "query-11"
+
+    window.close()
+    bus.shutdown()
+    db.close()
+
+
+def test_main_window_locks_ui_on_inactive_and_restores_after_auth(tmp_path: Path, qapp):
+    del qapp
+    db = Database(tmp_path / "vault.db")
+    db.connect()
+    audit = AuditRepository(db)
+    bus = EventBus()
+
+    state = StateManager()
+    km = KeyManager(db)
+    auth = AuthenticationService(key_manager=km, state=state, bus=bus)
+    auth.setup_master_password("UltraSafeA1!Key", username="nak")
+    crypto = AES256Placeholder(km)
+    vault_repo = VaultRepository(db=db, crypto=crypto)
+    settings_repo = SettingsRepository(db=db, crypto=crypto)
+    vault_repo.add(
+        title="Mail",
+        username="nakv1",
+        password="UltraSafeA1!Key",
+        url="https://gmail.com",
+        notes="demo",
+        tags="mail",
+        category="Personal",
+    )
+
+    window = MainWindow(
+        bus=bus,
+        state=state,
+        auth_service=auth,
+        audit_repo=audit,
+        vault_repo=vault_repo,
+        settings_repo=settings_repo,
+    )
+    window.reload_table()
+    assert window.secure_table.model.rowCount() >= 1
+    assert window.centralWidget().isEnabled() is True
+
+    auth.handle_application_activity(False)
+    window.sync_lock_state(prompt_relogin_on_active=False)
+    assert state.is_unlocked() is False
+    assert window.secure_table.model.rowCount() == 0
+    assert window.centralWidget().isEnabled() is False
+
+    auth.handle_application_activity(True)
+    relogin = auth.authenticate("UltraSafeA1!Key", username="nak")
+    assert relogin.success is True
+    window.sync_lock_state(prompt_relogin_on_active=False)
+    assert state.is_unlocked() is True
+    assert window.centralWidget().isEnabled() is True
+    assert window.secure_table.model.rowCount() >= 1
+
+    window.close()
+    bus.shutdown()
+    db.close()
+
+
+def test_enter_locked_mode_clears_clipboard_only_on_first_transition(tmp_path: Path, qapp):
+    del qapp
+    db = Database(tmp_path / "vault.db")
+    db.connect()
+    audit = AuditRepository(db)
+    bus = EventBus()
+
+    state = StateManager()
+    km = KeyManager(db)
+    auth = AuthenticationService(key_manager=km, state=state, bus=bus)
+    auth.setup_master_password("UltraSafeA1!Key", username="nak")
+    crypto = AES256Placeholder(km)
+    vault_repo = VaultRepository(db=db, crypto=crypto)
+    settings_repo = SettingsRepository(db=db, crypto=crypto)
+
+    window = MainWindow(
+        bus=bus,
+        state=state,
+        auth_service=auth,
+        audit_repo=audit,
+        vault_repo=vault_repo,
+        settings_repo=settings_repo,
+    )
+
+    clipboard = QApplication.clipboard()
+    clipboard.setText("should-be-cleared")
+    window.enter_locked_mode()
+    assert clipboard.text() == ""
+
+    clipboard.setText("copied-after-lock")
+    window.enter_locked_mode()
+    assert clipboard.text() == "copied-after-lock"
+
+    window.close()
     bus.shutdown()
     db.close()
