@@ -85,7 +85,7 @@ class CryptoSafeApp:
                 )
                 auth.apply_backoff_delay(result.delay_sec)
 
-        vault_repo = VaultRepository(db=db, crypto=crypto)
+        vault_repo = VaultRepository(db=db, crypto=crypto, bus=bus)
         settings_repo = SettingsRepository(db=db, crypto=crypto)
         audit_repo = AuditRepository(db)
         self.apply_cache_policy_from_settings(settings_repo, key_manager)
@@ -203,7 +203,9 @@ class CryptoSafeApp:
         main.show()
 
         def on_app_state_changed(new_state) -> None:
-            auth_holder["auth"].handle_application_activity(new_state == Qt.ApplicationActive)
+            app_is_active = new_state == Qt.ApplicationActive
+            auth_holder["auth"].handle_application_activity(app_is_active)
+            main.sync_lock_state(prompt_relogin_on_active=app_is_active)
 
         app.applicationStateChanged.connect(on_app_state_changed)
 
