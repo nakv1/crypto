@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -10,6 +9,7 @@ from core.events import EventBus, UserLoggedIn, UserLoggedOut
 from core.key_manager import KeyManager
 from core.security import secure_zero_bytearray
 from core.state_manager import StateManager
+from core.vault.entry_manager import EntryManager
 from database.db import Database
 from core.crypto.abstract import EncryptionService
 
@@ -158,47 +158,20 @@ class AuthenticationService:
 
         completed = False
         try:
+            entry_manager = EntryManager(
+                db=db,
+                key_manager=self.key_manager,
+                bus=self.bus,
+                legacy_crypto=crypto,
+            )
             with db.session() as conn:
-                rows = conn.execute(
-                    """
-                    SELECT id, encrypted_password, notes
-                    FROM vault_entries
-                    ORDER BY id
-                    """
-                ).fetchall()
-                total = len(rows)
-                if progress_callback is not None:
-                    progress_callback(0, total)
-
-                for index, row in enumerate(rows, start=1):
-                    enc_password = row["encrypted_password"]
-                    if not isinstance(enc_password, str):
-                        raise ValueError("Некорректный формат encrypted_password в базе.")
-                    old_password_raw = base64.b64decode(enc_password.encode("utf-8"))
-                    plain_password = crypto.decrypt_with_key(old_password_raw, bytes(old_key))
-                    new_password_raw = crypto.encrypt_with_key(plain_password, bytes(new_key))
-                    new_password_text = base64.b64encode(new_password_raw).decode("utf-8")
-
-                    notes_value = row["notes"]
-                    new_notes_text = None
-                    if notes_value is not None:
-                        if not isinstance(notes_value, str):
-                            raise ValueError("Некорректный формат notes в базе.")
-                        old_notes_raw = base64.b64decode(notes_value.encode("utf-8"))
-                        plain_notes = crypto.decrypt_with_key(old_notes_raw, bytes(old_key))
-                        new_notes_raw = crypto.encrypt_with_key(plain_notes, bytes(new_key))
-                        new_notes_text = base64.b64encode(new_notes_raw).decode("utf-8")
-
-                    conn.execute(
-                        """
-                        UPDATE vault_entries
-                        SET encrypted_password = ?, notes = ?, updated_at = ?
-                        WHERE id = ?
-                        """,
-                        (new_password_text, new_notes_text, now_utc_iso(), int(row["id"])),
-                    )
-                    if progress_callback is not None:
-                        progress_callback(index, total)
+                entry_manager.reencrypt_all_entries(
+                    old_key=bytes(old_key),
+                    new_key=bytes(new_key),
+                    progress_callback=progress_callback,
+                    legacy_crypto=crypto,
+                    conn=conn,
+                )
 
                 self.key_manager.store_key_data_with_connection(
                     conn=conn,
